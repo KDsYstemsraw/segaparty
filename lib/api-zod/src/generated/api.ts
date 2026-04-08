@@ -14,3 +14,77 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * @summary Create a new game session
+ */
+export const CreateSessionBody = zod.object({
+  hostName: zod.string(),
+  maxPlayers: zod.number().optional(),
+});
+
+/**
+ * @summary Get session by code
+ */
+export const GetSessionParams = zod.object({
+  code: zod.coerce.string(),
+});
+
+export const GetSessionResponse = zod.object({
+  code: zod.string(),
+  hostId: zod.string(),
+  players: zod.array(
+    zod.object({
+      id: zod.string(),
+      name: zod.string(),
+      isHost: zod.boolean(),
+      playerIndex: zod.number(),
+    }),
+  ),
+  maxPlayers: zod.number(),
+  createdAt: zod.string(),
+});
+
+/**
+ * @summary Join an existing session
+ */
+export const JoinSessionParams = zod.object({
+  code: zod.coerce.string(),
+});
+
+export const JoinSessionBody = zod.object({
+  playerName: zod.string(),
+});
+
+export const JoinSessionResponse = zod.object({
+  session: zod.object({
+    code: zod.string(),
+    hostId: zod.string(),
+    players: zod.array(
+      zod.object({
+        id: zod.string(),
+        name: zod.string(),
+        isHost: zod.boolean(),
+        playerIndex: zod.number(),
+      }),
+    ),
+    maxPlayers: zod.number(),
+    createdAt: zod.string(),
+  }),
+  playerId: zod.string(),
+});
+
+/**
+ * @summary Leave a session
+ */
+export const LeaveSessionParams = zod.object({
+  code: zod.coerce.string(),
+});
+
+export const LeaveSessionBody = zod.object({
+  playerId: zod.string(),
+});
+
+export const LeaveSessionResponse = zod.object({
+  success: zod.boolean(),
+});

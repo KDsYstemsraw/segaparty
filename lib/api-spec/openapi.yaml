@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: sessions
+    description: Game session operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,113 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /sessions:
+    post:
+      operationId: createSession
+      tags: [sessions]
+      summary: Create a new game session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionBody"
+      responses:
+        "201":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+
+  /sessions/{code}:
+    get:
+      operationId: getSession
+      tags: [sessions]
+      summary: Get session by code
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "404":
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /sessions/{code}/join:
+    post:
+      operationId: joinSession
+      tags: [sessions]
+      summary: Join an existing session
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JoinSessionBody"
+      responses:
+        "200":
+          description: Joined session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinSessionResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /sessions/{code}/leave:
+    post:
+      operationId: leaveSession
+      tags: [sessions]
+      summary: Leave a session
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeaveSessionBody"
+      responses:
+        "200":
+          description: Left session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +143,94 @@ components:
       required:
         - status
 
+    Player:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        isHost:
+          type: boolean
+        playerIndex:
+          type: integer
+      required:
+        - id
+        - name
+        - isHost
+        - playerIndex
+
+    Session:
+      type: object
+      properties:
+        code:
+          type: string
+        hostId:
+          type: string
+        players:
+          type: array
+          items:
+            $ref: "#/components/schemas/Player"
+        maxPlayers:
+          type: integer
+        createdAt:
+          type: string
+      required:
+        - code
+        - hostId
+        - players
+        - maxPlayers
+        - createdAt
+
+    CreateSessionBody:
+      type: object
+      properties:
+        hostName:
+          type: string
+        maxPlayers:
+          type: integer
+      required:
+        - hostName
+
+    JoinSessionBody:
+      type: object
+      properties:
+        playerName:
+          type: string
+      required:
+        - playerName
+
+    JoinSessionResponse:
+      type: object
+      properties:
+        session:
+          $ref: "#/components/schemas/Session"
+        playerId:
+          type: string
+      required:
+        - session
+        - playerId
+
+    LeaveSessionBody:
+      type: object
+      properties:
+        playerId:
+          type: string
+      required:
+        - playerId
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required:
+        - success
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error

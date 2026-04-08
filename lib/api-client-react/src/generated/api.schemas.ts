@@ -8,3 +8,44 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface Player {
+  id: string;
+  name: string;
+  isHost: boolean;
+  playerIndex: number;
+}
+
+export interface Session {
+  code: string;
+  hostId: string;
+  players: Player[];
+  maxPlayers: number;
+  createdAt: string;
+}
+
+export interface CreateSessionBody {
+  hostName: string;
+  maxPlayers?: number;
+}
+
+export interface JoinSessionBody {
+  playerName: string;
+}
+
+export interface JoinSessionResponse {
+  session: Session;
+  playerId: string;
+}
+
+export interface LeaveSessionBody {
+  playerId: string;
+}
+
+export interface SuccessResponse {
+  success: boolean;
+}
+
+export interface ErrorResponse {
+  error: string;
+}

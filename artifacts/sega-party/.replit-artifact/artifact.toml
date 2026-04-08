@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Sega Party"
+version = "1.0.0"
+id = "artifacts/sega-party"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23655
+
+[services.development]
+run = "pnpm --filter @workspace/sega-party run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/sega-party", "run", "build" ]
+publicDir = "artifacts/sega-party/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23655"
+BASE_PATH = "/"
