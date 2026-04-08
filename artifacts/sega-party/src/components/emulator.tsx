@@ -19,6 +19,7 @@ declare global {
 export function Emulator({ romUrl, onStreamReady }: EmulatorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamReadyFired = useRef(false);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -29,26 +30,47 @@ export function Emulator({ romUrl, onStreamReady }: EmulatorProps) {
     window.EJS_pathtodata = "https://cdn.emulatorjs.org/stable/data/";
     window.EJS_startOnLoaded = true;
 
+    const tryCapture = (): boolean => {
+      if (streamReadyFired.current || !onStreamReady) return true;
+      const canvas = document.querySelector("#game canvas") as HTMLCanvasElement | null;
+      if (!canvas) return false;
+      try {
+        const stream = canvas.captureStream(30);
+        if (stream.getVideoTracks().length === 0) return false;
+        streamReadyFired.current = true;
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+        onStreamReady(stream);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
     if (onStreamReady) {
+      // EJS callback fires when the game actually starts — try immediately + with delays
       window.EJS_onGameStart = () => {
-        if (streamReadyFired.current) return;
-        // Poll for the canvas that EmulatorJS creates inside #game
-        let attempts = 0;
-        const poll = setInterval(() => {
-          const canvas = document.querySelector("#game canvas") as HTMLCanvasElement | null;
-          if (canvas) {
-            clearInterval(poll);
-            try {
-              const stream = canvas.captureStream(30);
-              streamReadyFired.current = true;
-              onStreamReady(stream);
-            } catch (e) {
-              // captureStream may fail if canvas is cross-origin tainted
-            }
-          }
-          if (++attempts > 50) clearInterval(poll);
-        }, 200);
+        if (tryCapture()) return;
+        setTimeout(tryCapture, 500);
+        setTimeout(tryCapture, 1500);
+        setTimeout(tryCapture, 3000);
       };
+
+      // Also poll every second as a fallback — handles cases where EJS_onGameStart
+      // doesn't fire or canvas appears before/after expected timing
+      let pollAttempts = 0;
+      pollIntervalRef.current = setInterval(() => {
+        if (tryCapture()) return;
+        pollAttempts++;
+        if (pollAttempts > 180) {
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+        }
+      }, 1000);
     }
 
     const script = document.createElement("script");
@@ -57,6 +79,10 @@ export function Emulator({ romUrl, onStreamReady }: EmulatorProps) {
     document.body.appendChild(script);
 
     return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
       if (document.body.contains(script)) {
         document.body.removeChild(script);
       }

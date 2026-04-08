@@ -20,15 +20,6 @@ function getPeers(sessionCode: string): Map<string, PeerInfo> {
   return sessions.get(sessionCode)!;
 }
 
-function removePeer(sessionCode: string, peerId: string) {
-  const peers = sessions.get(sessionCode);
-  if (!peers) return;
-  peers.delete(peerId);
-  if (peers.size === 0) {
-    sessions.delete(sessionCode);
-  }
-}
-
 export function attachSignalingServer(server: Server) {
   const wss = new WebSocketServer({ server, path: "/ws" });
 
@@ -57,34 +48,36 @@ export function attachSignalingServer(server: Server) {
         mySessionCode = sessionCode;
 
         const peers = getPeers(sessionCode);
-
-        // Save this peer
         peers.set(peerId, { ws, peerId, sessionCode, role });
 
         logger.info({ sessionCode, peerId, role, totalPeers: peers.size }, "Peer joined signaling");
 
         if (role === "guest") {
-          // Tell guest about the host, and tell host about this new guest
+          // Find the host and exchange introductions
           for (const [otherId, other] of peers) {
             if (otherId === peerId) continue;
-
             if (other.role === "host") {
               // Tell guest the host exists
               ws.send(JSON.stringify({ type: "host-info", hostPeerId: otherId }));
-
-              // Tell host a new guest joined
+              // Tell host a new guest joined — host will initiate the offer
               if (other.ws.readyState === WebSocket.OPEN) {
                 other.ws.send(JSON.stringify({ type: "peer-joined", peerId, role: "guest" }));
               }
             }
           }
         } else if (role === "host") {
-          // Notify any waiting guests that host is here
+          // Notify existing guests that host is here
+          // AND notify the host about each existing guest (so it can initiate offers)
           for (const [otherId, other] of peers) {
             if (otherId === peerId) continue;
+
+            // Tell each guest the host is now available
             if (other.ws.readyState === WebSocket.OPEN) {
               other.ws.send(JSON.stringify({ type: "host-info", hostPeerId: peerId }));
             }
+
+            // Tell the host about each existing guest so it can create offers
+            ws.send(JSON.stringify({ type: "peer-joined", peerId: otherId, role: other.role }));
           }
         }
 
@@ -121,7 +114,6 @@ export function attachSignalingServer(server: Server) {
         const peers = getPeers(sessionCode);
         peers.delete(peerId);
 
-        // Notify others
         for (const [, other] of peers) {
           if (other.ws.readyState === WebSocket.OPEN) {
             other.ws.send(JSON.stringify({ type: "peer-left", peerId }));

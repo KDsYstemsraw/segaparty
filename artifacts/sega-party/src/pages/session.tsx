@@ -8,7 +8,7 @@ import { useGamepad } from "@/hooks/useGamepad";
 import { ControlsModal } from "@/components/ControlsModal";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Copy, Users, Wifi, WifiOff, AlertTriangle, HomeIcon, Gamepad2, Settings2 } from "lucide-react";
+import { Copy, Users, Wifi, WifiOff, AlertTriangle, HomeIcon, Gamepad2, Settings2, Volume2, VolumeX } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -23,6 +23,8 @@ export default function SessionPage() {
 
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
+  const [isMuted, setIsMuted] = useState(true);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const peerConnsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
@@ -266,6 +268,14 @@ export default function SessionPage() {
     };
   }, [isHost]);
 
+  // Wire remote stream to video element
+  useEffect(() => {
+    if (videoRef.current && remoteStream) {
+      videoRef.current.srcObject = remoteStream;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [remoteStream]);
+
   const copyLink = () => {
     navigator.clipboard.writeText(window.location.href).then(() => {
       toast({ title: "Link copied!", description: "Share with friends to play together." });
@@ -345,14 +355,22 @@ export default function SessionPage() {
       ) : (
         // Guest view
         remoteStream ? (
-          <div className="w-full max-w-3xl mx-auto aspect-video bg-black border-4 border-primary shadow-[0_0_20px_rgba(0,71,187,0.4)] relative overflow-hidden">
+          <div className="w-full max-w-3xl mx-auto aspect-video bg-black border-4 border-primary shadow-[0_0_20px_rgba(0,71,187,0.4)] relative overflow-hidden group">
             <video
-              ref={(el) => { if (el && remoteStream) { el.srcObject = remoteStream; el.play().catch(() => {}); } }}
+              ref={videoRef}
               className="w-full h-full object-contain"
               autoPlay
               playsInline
-              muted={false}
+              muted={isMuted}
             />
+            {/* Mute/unmute toggle — visible on hover */}
+            <button
+              onClick={() => setIsMuted((m) => !m)}
+              className="absolute bottom-2 right-2 bg-black/60 hover:bg-black/80 text-white rounded p-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
+              title={isMuted ? "Unmute" : "Mute"}
+            >
+              {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            </button>
           </div>
         ) : (
           <div className="w-full max-w-3xl aspect-video bg-black border-4 border-primary/30 flex flex-col items-center justify-center gap-4 text-center px-8">
