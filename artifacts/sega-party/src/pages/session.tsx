@@ -73,6 +73,11 @@ export default function SessionPage() {
 
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
+  const [webrtcStatus, setWebrtcStatus] = useState<{ ice: string; tracks: number; lastSignal: string }>({
+    ice: "idle",
+    tracks: 0,
+    lastSignal: "none",
+  });
   const [isMuted, setIsMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [audioBlocked, setAudioBlocked] = useState(false);
@@ -192,6 +197,23 @@ export default function SessionPage() {
     [code],
   );
 
+  // Helper to safely parse SessionDescriptionInit from any wire format
+  const toSdpInit = (raw: unknown, defaultType: "offer" | "answer"): RTCSessionDescriptionInit => {
+    if (raw && typeof raw === "object") {
+      const obj = raw as Record<string, unknown>;
+      if (typeof obj.sdp === "string") {
+        return {
+          type: (obj.type as RTCSdpType) || defaultType,
+          sdp: obj.sdp,
+        };
+      }
+    }
+    if (typeof raw === "string") {
+      return { type: defaultType, sdp: raw };
+    }
+    return { type: defaultType, sdp: "" };
+  };
+
   // Host creates WebRTC Offer for a connected guest
   const createHostOffer = useCallback(
     async (guestPeerId: string, stream: MediaStream | null) => {
@@ -243,6 +265,7 @@ export default function SessionPage() {
 
         pc.oniceconnectionstatechange = () => {
           loggerDebug(`Host ICE with ${guestPeerId}: ${pc.iceConnectionState}`);
+          setWebrtcStatus((prev) => ({ ...prev, ice: pc.iceConnectionState }));
         };
 
         const offer = await pc.createOffer({
@@ -250,7 +273,8 @@ export default function SessionPage() {
           offerToReceiveVideo: false,
         });
         await pc.setLocalDescription(offer);
-        sendSignal(guestPeerId, { type: "offer", sdp: pc.localDescription });
+        setWebrtcStatus((prev) => ({ ...prev, lastSignal: `Sent Offer (${stream?.getTracks().length || 0} tracks)` }));
+        sendSignal(guestPeerId, { type: "offer", sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp } });
       } catch (err) {
         console.error("Error creating host offer:", err);
       }
@@ -270,7 +294,7 @@ export default function SessionPage() {
     async (fromPeerId: string, data: Record<string, unknown>) => {
       try {
         if (data.type === "offer" && !isHost) {
-          // Reuse existing PeerConnection for renegotiation (e.g. audio track added)
+          setWebrtcStatus((prev) => ({ ...prev, lastSignal: "Received Offer" }));
           let pc = peerConnsRef.current.get(fromPeerId);
           const isRenegotiation = !!pc;
 
@@ -279,6 +303,7 @@ export default function SessionPage() {
             peerConnsRef.current.set(fromPeerId, pc);
 
             pc.ontrack = (e) => {
+              setWebrtcStatus((prev) => ({ ...prev, tracks: prev.tracks + 1 }));
               if (e.streams && e.streams[0]) {
                 setRemoteStream(e.streams[0]);
                 setConnectionStatus("connected");
@@ -307,6 +332,7 @@ export default function SessionPage() {
             };
 
             pc.oniceconnectionstatechange = () => {
+              setWebrtcStatus((prev) => ({ ...prev, ice: pc!.iceConnectionState }));
               if (pc!.iceConnectionState === "connected" || pc!.iceConnectionState === "completed") {
                 setConnectionStatus("connected");
               } else if (pc!.iceConnectionState === "failed") {
@@ -323,7 +349,8 @@ export default function SessionPage() {
             };
           }
 
-          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
+          const sdpInit = toSdpInit(data.sdp, "offer");
+          await pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
 
           // Flush any queued ICE candidates for this peer
           if (!isRenegotiation) {
@@ -340,14 +367,17 @@ export default function SessionPage() {
 
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          sendSignal(fromPeerId, { type: "answer", sdp: pc.localDescription });
+          setWebrtcStatus((prev) => ({ ...prev, lastSignal: "Sent Answer" }));
+          sendSignal(fromPeerId, { type: "answer", sdp: pc.localDescription?.toJSON() || { type: "answer", sdp: pc.localDescription?.sdp } });
           return;
         }
 
         if (data.type === "answer" && isHost) {
+          setWebrtcStatus((prev) => ({ ...prev, lastSignal: "Received Answer" }));
           const pc = peerConnsRef.current.get(fromPeerId);
           if (pc) {
-            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
+            const sdpInit = toSdpInit(data.sdp, "answer");
+            await pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
 
             // Flush any queued ICE candidates for this peer
             const queued = iceCandidateQueueRef.current.get(fromPeerId) || [];
@@ -1045,6 +1075,15 @@ export default function SessionPage() {
                           ? "Could not establish WebRTC stream. The host may still be loading the game."
                           : "Waiting for host's Genesis emulator video & audio feed to start..."}
                       </p>
+                    </div>
+
+                    {/* Live WebRTC Telemetry HUD */}
+                    <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] font-mono text-muted-foreground bg-black/60 px-3 py-1.5 rounded-md border border-primary/30">
+                      <span>ICE: <b className={webrtcStatus.ice === "connected" || webrtcStatus.ice === "completed" ? "text-green-400" : "text-yellow-400"}>{webrtcStatus.ice}</b></span>
+                      <span className="opacity-40">•</span>
+                      <span>Signal: <b className="text-primary">{webrtcStatus.lastSignal}</b></span>
+                      <span className="opacity-40">•</span>
+                      <span>Tracks: <b className="text-foreground">{webrtcStatus.tracks}</b></span>
                     </div>
                     {connectionStatus === "error" && (
                       <Button
