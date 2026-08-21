@@ -161,47 +161,10 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
       },
     };
 
-    // Track all pending timers and animation frames for cleanup
+    // Track all pending timers for cleanup
     const pendingTimeouts: ReturnType<typeof setTimeout>[] = [];
     let audioPollId: ReturnType<typeof setInterval> | null = null;
     let audioPollTimeoutId: ReturnType<typeof setTimeout> | null = null;
-    let captureAnimFrameId: number | null = null;
-
-    // 2D Frame-buffer Capture Bridge (avoids WebGL backbuffer clearing / black frames)
-    const captureCanvas = document.createElement("canvas");
-    const captureCtx = captureCanvas.getContext("2d", { alpha: false });
-    if (captureCtx) {
-      captureCtx.imageSmoothingEnabled = false;
-    }
-
-    let isCapturingFrames = false;
-    const startFrameCopyLoop = (sourceCanvas: HTMLCanvasElement) => {
-      if (isCapturingFrames) return;
-      isCapturingFrames = true;
-
-      captureCanvas.width = sourceCanvas.width || 640;
-      captureCanvas.height = sourceCanvas.height || 480;
-      if (captureCtx) {
-        captureCtx.fillStyle = "#000000";
-        captureCtx.fillRect(0, 0, captureCanvas.width, captureCanvas.height);
-        captureCtx.imageSmoothingEnabled = false;
-      }
-
-      const copyFrame = () => {
-        if (sourceCanvas && sourceCanvas.width > 0 && sourceCanvas.height > 0) {
-          if (captureCanvas.width !== sourceCanvas.width || captureCanvas.height !== sourceCanvas.height) {
-            captureCanvas.width = sourceCanvas.width;
-            captureCanvas.height = sourceCanvas.height;
-            if (captureCtx) captureCtx.imageSmoothingEnabled = false;
-          }
-          if (captureCtx) {
-            captureCtx.drawImage(sourceCanvas, 0, 0, captureCanvas.width, captureCanvas.height);
-          }
-        }
-        captureAnimFrameId = requestAnimationFrame(copyFrame);
-      };
-      captureAnimFrameId = requestAnimationFrame(copyFrame);
-    };
 
     const tryCapture = (): boolean => {
       if (streamReadyFired.current || !onStreamReadyRef.current) return true;
@@ -210,12 +173,10 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
       if (!sourceCanvas) return false;
 
       try {
-        startFrameCopyLoop(sourceCanvas);
-
-        const captureFn = captureCanvas.captureStream || (captureCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
+        const captureFn = sourceCanvas.captureStream || (sourceCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
         if (!captureFn) return false;
 
-        const videoStream = captureFn.call(captureCanvas, 60);
+        const videoStream = captureFn.call(sourceCanvas, 60);
         if (videoStream.getVideoTracks().length === 0) return false;
 
         const composite = new MediaStream();
@@ -289,13 +250,6 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
     document.body.appendChild(script);
 
     return () => {
-      // Cancel frame capture loop
-      if (captureAnimFrameId !== null) {
-        cancelAnimationFrame(captureAnimFrameId);
-        captureAnimFrameId = null;
-      }
-      isCapturingFrames = false;
-
       // Clear all tracked timers
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
