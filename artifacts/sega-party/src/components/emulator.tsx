@@ -70,10 +70,15 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
 
     installAudioCaptureHook();
 
+    const gameEl = document.getElementById("game");
+    if (gameEl) {
+      gameEl.innerHTML = "";
+    }
+
     window.EJS_player = "#game";
     window.EJS_core = "segaMD";
     window.EJS_gameUrl = romUrl;
-    window.EJS_pathtodata = "https://cdn.emulatorjs.org/stable/data/";
+    window.EJS_pathtodata = "/emulatorjs/";
     window.EJS_startOnLoaded = true;
 
     // Configure conflict-free default mappings for 4 players
@@ -188,7 +193,6 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
       }
     };
 
-
     if (onStreamReady) {
       window.EJS_onGameStart = () => {
         if (tryCapture()) return;
@@ -211,7 +215,7 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
     }
 
     const script = document.createElement("script");
-    script.src = "https://cdn.emulatorjs.org/stable/data/loader.js";
+    script.src = "/emulatorjs/loader.js";
     script.async = true;
     document.body.appendChild(script);
 
@@ -224,6 +228,7 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
         document.body.removeChild(script);
       }
     };
+
   }, [romUrl, onStreamReady, onAudioTrackAdded]);
 
   const toggleFullscreen = () => {
