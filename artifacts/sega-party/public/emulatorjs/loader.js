@@ -50,28 +50,18 @@
                 filesmissing(file).then(e => resolve());
             }
             document.head.appendChild(css);
-        })
+        });
     }
 
-    async function filesmissing(file) {
-        console.error("Failed to load " + file);
-        let minifiedFailed = file.includes(".min.") && !file.includes("socket");
-        console[minifiedFailed ? "warn" : "error"]("Failed to load " + file + " beacuse it's likly that the minified files are missing.\nTo fix this you have 3 options:\n1. You can download the zip from the latest release here: https://github.com/EmulatorJS/EmulatorJS/releases/latest - Stable\n2. You can download the zip from here: https://cdn.emulatorjs.org/latest/data/emulator.min.zip and extract it to the data/ folder. (easiest option) - Beta\n3. You can build the files by running `npm i && npm run build` in the data/minify folder. (hardest option) - Beta\nNote: you will probably need to do the same for the cores, extract them to the data/cores/ folder.");
-        if (minifiedFailed) {
-            console.log("Attempting to load non-minified files");
-            if (file === "emulator.min.js") {
-                for (let i = 0; i < scripts.length; i++) {
-                    await loadScript(scripts[i]);
-                }
-        }
-    }
-
+    // Sequentially load all modular scripts
     for (let i = 0; i < scripts.length; i++) {
         await loadScript(scripts[i]);
     }
+
     await loadStyle("emulator.css");
 
     const config = {};
+
 
     config.gameUrl = window.EJS_gameUrl;
     config.dataPath = scriptPath;
