@@ -115,6 +115,9 @@ export default function SessionPage() {
   const iceCandidateQueueRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const participantsRef = useRef<ParticipantInfo[]>([]);
   const hostPeerIdRef = useRef<string | null>(null);
+  const guestAudioCtxRef = useRef<AudioContext | null>(null);
+  const guestAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const guestGainNodeRef = useRef<GainNode | null>(null);
 
 
   const joinSession = useJoinSession();
@@ -214,7 +217,44 @@ export default function SessionPage() {
     return { type: defaultType, sdp: "" };
   };
 
-  // Host creates WebRTC Offer for a connected guest
+  // Guest WebAudio pipeline for uncompressed low-latency game sound (Kosmi style)
+  const attachGuestWebAudio = useCallback((stream: MediaStream) => {
+    try {
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) return;
+
+      const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtxClass) return;
+
+      if (!guestAudioCtxRef.current) {
+        guestAudioCtxRef.current = new AudioCtxClass();
+      }
+      const ctx = guestAudioCtxRef.current;
+
+      if (!guestGainNodeRef.current) {
+        const gain = ctx.createGain();
+        gain.gain.value = isMuted ? 0 : volume;
+        gain.connect(ctx.destination);
+        guestGainNodeRef.current = gain;
+      }
+
+      if (guestAudioSourceRef.current) {
+        try { guestAudioSourceRef.current.disconnect(); } catch {}
+      }
+
+      const source = ctx.createMediaStreamSource(stream);
+      source.connect(guestGainNodeRef.current);
+      guestAudioSourceRef.current = source;
+
+      if (ctx.state === "suspended" && !isMuted) {
+        ctx.resume().catch(() => {});
+      }
+    } catch (err) {
+      console.warn("Guest WebAudio setup error:", err);
+    }
+  }, [isMuted, volume]);
+
+  // Host creates WebRTC Offer for a connected guest with explicit transceivers
   const createHostOffer = useCallback(
     async (guestPeerId: string, stream: MediaStream | null) => {
       try {
@@ -253,7 +293,7 @@ export default function SessionPage() {
 
         if (stream) {
           for (const track of stream.getTracks()) {
-            pc.addTrack(track, stream);
+            pc.addTransceiver(track, { direction: "sendonly", streams: [stream] });
           }
         }
 
@@ -302,22 +342,22 @@ export default function SessionPage() {
             pc = new RTCPeerConnection(RTC_CONFIG);
             peerConnsRef.current.set(fromPeerId, pc);
 
+            pc.addTransceiver("video", { direction: "recvonly" });
+            pc.addTransceiver("audio", { direction: "recvonly" });
+
             pc.ontrack = (e) => {
               setWebrtcStatus((prev) => ({ ...prev, tracks: prev.tracks + 1 }));
-              if (e.streams && e.streams[0]) {
-                setRemoteStream(e.streams[0]);
-                setConnectionStatus("connected");
-              } else if (e.track) {
-                // Return a NEW MediaStream so React detects the state change
-                setRemoteStream((prev) => {
-                  const newStream = new MediaStream(prev ? prev.getTracks() : []);
-                  if (!newStream.getTracks().some((t) => t.id === e.track.id)) {
-                    newStream.addTrack(e.track);
-                  }
-                  return newStream;
-                });
-                setConnectionStatus("connected");
-              }
+              const incomingStream = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
+              setRemoteStream((prev) => {
+                const newStream = new MediaStream(prev ? prev.getTracks() : []);
+                if (!newStream.getTracks().some((t) => t.id === e.track.id)) {
+                  newStream.addTrack(e.track);
+                }
+                attachGuestWebAudio(newStream);
+                return newStream;
+              });
+              attachGuestWebAudio(incomingStream);
+              setConnectionStatus("connected");
             };
 
             pc.ondatachannel = (e) => {
@@ -597,9 +637,11 @@ export default function SessionPage() {
 
   // Handle guest volume and mute adjustments
   useEffect(() => {
+    if (guestGainNodeRef.current) {
+      guestGainNodeRef.current.gain.value = isMuted ? 0 : volume;
+    }
     if (videoRef.current) {
       videoRef.current.volume = isMuted ? 0 : volume;
-      videoRef.current.muted = isMuted;
     }
   }, [volume, isMuted]);
 
@@ -842,11 +884,17 @@ export default function SessionPage() {
   };
 
   const unlockAudio = () => {
+    setIsMuted(false);
+    setAudioBlocked(false);
+    if (guestAudioCtxRef.current) {
+      if (guestAudioCtxRef.current.state === "suspended") {
+        guestAudioCtxRef.current.resume().catch(() => {});
+      }
+      if (guestGainNodeRef.current) {
+        guestGainNodeRef.current.gain.value = volume;
+      }
+    }
     if (videoRef.current) {
-      videoRef.current.muted = false;
-      videoRef.current.volume = volume;
-      setIsMuted(false);
-      setAudioBlocked(false);
       videoRef.current.play().catch(() => {});
     }
   };

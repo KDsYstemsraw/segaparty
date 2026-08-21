@@ -202,6 +202,14 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
 
         if (!stream || stream.getVideoTracks().length === 0) return false;
 
+        // Apply Kosmi content hints for 60 FPS pixel precision & uncompressed audio
+        stream.getVideoTracks().forEach((vt) => {
+          if ("contentHint" in vt) (vt as unknown as { contentHint: string }).contentHint = "motion";
+        });
+        stream.getAudioTracks().forEach((at) => {
+          if ("contentHint" in at) (at as unknown as { contentHint: string }).contentHint = "music";
+        });
+
         streamReadyFired.current = true;
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
