@@ -78,7 +78,7 @@ export default function SessionPage() {
     tracks: 0,
     lastSignal: "none",
   });
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
   const [volume, setVolume] = useState(1);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [crtFilter, setCrtFilter] = useState(false);
@@ -570,29 +570,30 @@ export default function SessionPage() {
     };
   }, [code, isHost, myPlayerName, session?.code, createHostOffer, handleSignal, toast]);
 
-  // Bind remote stream to HTML5 video element with auto-recovery
+  // Bind remote stream to HTML5 video element with auto-recovery and onunmute handler
   useEffect(() => {
     if (videoRef.current && remoteStream) {
       if (videoRef.current.srcObject !== remoteStream) {
         videoRef.current.srcObject = remoteStream;
       }
-      videoRef.current.muted = true; // Start muted to ensure immediate playback
+      videoRef.current.muted = isMuted;
       videoRef.current
         .play()
         .then(() => {
           setConnectionStatus("connected");
-          setAudioBlocked(false);
         })
-        .catch((err) => {
-          console.warn("Autoplay blocked, playing muted video:", err);
-          setAudioBlocked(true);
+        .catch(() => {});
+
+      // Auto-trigger playback when video packets begin arriving
+      remoteStream.getVideoTracks().forEach((track) => {
+        track.onunmute = () => {
           if (videoRef.current) {
-            videoRef.current.muted = true;
             videoRef.current.play().catch(() => {});
           }
-        });
+        };
+      });
     }
-  }, [remoteStream]);
+  }, [remoteStream, isMuted]);
 
   // Handle guest volume and mute adjustments
   useEffect(() => {
@@ -997,11 +998,16 @@ export default function SessionPage() {
                 {remoteStream ? (
                   <>
                     <video
-                      ref={videoRef}
+                      ref={(el) => {
+                        videoRef.current = el;
+                        if (el && remoteStream && el.srcObject !== remoteStream) {
+                          el.srcObject = remoteStream;
+                          el.play().catch(() => {});
+                        }
+                      }}
                       className="w-full h-full object-contain"
                       autoPlay
                       playsInline
-                      muted
                     />
 
                     {/* CRT Scanline Filter */}
@@ -1009,13 +1015,19 @@ export default function SessionPage() {
                       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.4)_50%)] bg-[length:100%_4px] z-10 opacity-70" />
                     )}
 
-                    {/* Autoplay Unmute Recovery Banner */}
-                    {audioBlocked && (
-                      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-accent/90 text-accent-foreground px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 animate-bounce cursor-pointer">
-                        <VolumeX className="w-4 h-4" />
-                        <button onClick={unlockAudio} className="text-xs font-bold font-sans uppercase">
-                          Click to Enable Audio
-                        </button>
+                    {/* Persistent Click Screen to Enable Audio Banner */}
+                    {isMuted && (
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          unlockAudio();
+                        }}
+                        className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-primary/95 text-primary-foreground px-5 py-2.5 rounded-full shadow-[0_0_25px_rgba(0,71,187,0.8)] border border-white/20 flex items-center gap-2.5 animate-pulse cursor-pointer hover:scale-105 transition-transform"
+                      >
+                        <VolumeX className="w-4 h-4 text-yellow-300" />
+                        <span className="text-xs font-bold font-sans tracking-wide uppercase">
+                          Click Screen to Enable Audio
+                        </span>
                       </div>
                     )}
 
