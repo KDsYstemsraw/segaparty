@@ -166,6 +166,11 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
     let audioPollId: ReturnType<typeof setInterval> | null = null;
     let audioPollTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
+    // 2D Intermediate Capture Buffer Pump for WebGL (avoids preserveDrawingBuffer: false black screen)
+    let captureCanvas: HTMLCanvasElement | null = null;
+    let captureCtx: CanvasRenderingContext2D | null = null;
+    let animFrameId: number | null = null;
+
     const tryCapture = (): boolean => {
       if (streamReadyFired.current || !onStreamReadyRef.current) return true;
 
@@ -173,10 +178,42 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
       if (!sourceCanvas) return false;
 
       try {
-        const captureFn = sourceCanvas.captureStream || (sourceCanvas as unknown as { mozCaptureStream?: () => MediaStream }).mozCaptureStream;
+        const width = sourceCanvas.width || 320;
+        const height = sourceCanvas.height || 224;
+
+        if (!captureCanvas) {
+          captureCanvas = document.createElement("canvas");
+          captureCanvas.width = width;
+          captureCanvas.height = height;
+          captureCanvas.style.display = "none";
+          document.body.appendChild(captureCanvas);
+          captureCtx = captureCanvas.getContext("2d", { alpha: false });
+          if (captureCtx) {
+            captureCtx.imageSmoothingEnabled = false;
+          }
+        }
+
+        let running = true;
+        const pump = () => {
+          if (!running) return;
+          if (captureCtx && sourceCanvas && sourceCanvas.width > 0 && sourceCanvas.height > 0) {
+            if (captureCanvas && (captureCanvas.width !== sourceCanvas.width || captureCanvas.height !== sourceCanvas.height)) {
+              captureCanvas.width = sourceCanvas.width;
+              captureCanvas.height = sourceCanvas.height;
+              if (captureCtx) captureCtx.imageSmoothingEnabled = false;
+            }
+            try {
+              captureCtx.drawImage(sourceCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height);
+            } catch {}
+          }
+          animFrameId = requestAnimationFrame(pump);
+        };
+        animFrameId = requestAnimationFrame(pump);
+
+        const captureFn = captureCanvas.captureStream || (captureCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
         if (!captureFn) return false;
 
-        const videoStream = captureFn.call(sourceCanvas);
+        const videoStream = captureFn.call(captureCanvas, 60);
         const videoTracks = videoStream.getVideoTracks();
         if (videoTracks.length === 0) return false;
 
@@ -315,6 +352,14 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
       if (window.__emulatorAudioStream) {
         window.__emulatorAudioStream.getTracks().forEach((t) => t.stop());
         window.__emulatorAudioStream = null;
+      }
+
+      // Clean up 2D capture pump
+      if (animFrameId) {
+        cancelAnimationFrame(animFrameId);
+      }
+      if (captureCanvas && captureCanvas.parentNode) {
+        captureCanvas.parentNode.removeChild(captureCanvas);
       }
 
       // Clean up global EJS properties
