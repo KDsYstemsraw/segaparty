@@ -62,6 +62,12 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
   const streamReadyFired = useRef(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const onStreamReadyRef = useRef(onStreamReady);
+  onStreamReadyRef.current = onStreamReady;
+
+  const onAudioTrackAddedRef = useRef(onAudioTrackAdded);
+  onAudioTrackAddedRef.current = onAudioTrackAdded;
+
   const [crtFilter, setCrtFilter] = useState(false);
   const [aspect43, setAspect43] = useState(true);
 
@@ -70,10 +76,18 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
 
     installAudioCaptureHook();
 
+    // Clean up any existing emulator instances or previous game DOM nodes
     const gameEl = document.getElementById("game");
     if (gameEl) {
       gameEl.innerHTML = "";
     }
+
+    try {
+      (window as unknown as { EJS_emulator?: { stop?: () => void } }).EJS_emulator?.stop?.();
+    } catch {}
+    delete (window as unknown as { EJS_emulator?: unknown }).EJS_emulator;
+
+    streamReadyFired.current = false;
 
     window.EJS_player = "#game";
     window.EJS_core = "segaMD";
@@ -142,7 +156,7 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
     };
 
     const tryCapture = (): boolean => {
-      if (streamReadyFired.current || !onStreamReady) return true;
+      if (streamReadyFired.current || !onStreamReadyRef.current) return true;
       const canvas = (document.querySelector("#game canvas") ||
         document.querySelector("canvas") ||
         (document.querySelector("#game iframe") as HTMLIFrameElement)?.contentDocument?.querySelector("canvas")) as HTMLCanvasElement | null;
@@ -171,14 +185,14 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
         }
-        onStreamReady(composite);
+        onStreamReadyRef.current(composite);
 
         // Keep checking for late audio stream initialization
         const audioPoll = setInterval(() => {
-          if (window.__emulatorAudioStream && onAudioTrackAdded) {
+          if (window.__emulatorAudioStream && onAudioTrackAddedRef.current) {
             const audioTracks = window.__emulatorAudioStream.getAudioTracks();
             if (audioTracks.length > 0) {
-              onAudioTrackAdded(audioTracks[0]);
+              onAudioTrackAddedRef.current(audioTracks[0]);
               clearInterval(audioPoll);
             }
           }
@@ -193,26 +207,24 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
       }
     };
 
-    if (onStreamReady) {
-      window.EJS_onGameStart = () => {
-        if (tryCapture()) return;
-        setTimeout(tryCapture, 400);
-        setTimeout(tryCapture, 1200);
-        setTimeout(tryCapture, 2500);
-      };
+    window.EJS_onGameStart = () => {
+      if (tryCapture()) return;
+      setTimeout(tryCapture, 400);
+      setTimeout(tryCapture, 1200);
+      setTimeout(tryCapture, 2500);
+    };
 
-      let pollAttempts = 0;
-      pollIntervalRef.current = setInterval(() => {
-        if (tryCapture()) return;
-        pollAttempts++;
-        if (pollAttempts > 180) {
-          if (pollIntervalRef.current) {
-            clearInterval(pollIntervalRef.current);
-            pollIntervalRef.current = null;
-          }
+    let pollAttempts = 0;
+    pollIntervalRef.current = setInterval(() => {
+      if (tryCapture()) return;
+      pollAttempts++;
+      if (pollAttempts > 180) {
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
         }
-      }, 1000);
-    }
+      }
+    }, 1000);
 
     const script = document.createElement("script");
     script.src = "/emulatorjs/loader.js";
@@ -227,9 +239,13 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
       if (document.body.contains(script)) {
         document.body.removeChild(script);
       }
+      try {
+        (window as unknown as { EJS_emulator?: { stop?: () => void } }).EJS_emulator?.stop?.();
+      } catch {}
+      delete (window as unknown as { EJS_emulator?: unknown }).EJS_emulator;
     };
+  }, [romUrl]);
 
-  }, [romUrl, onStreamReady, onAudioTrackAdded]);
 
   const toggleFullscreen = () => {
     if (!containerRef.current) return;

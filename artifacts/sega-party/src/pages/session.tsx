@@ -488,22 +488,32 @@ export default function SessionPage() {
     };
   }, [code, isHost, myPlayerName, session?.code, createHostOffer, handleSignal, toast]);
 
+  const participantsRef = useRef(participants);
+  participantsRef.current = participants;
+
   // Bind remote stream to HTML5 video element with auto-recovery
   useEffect(() => {
     if (videoRef.current && remoteStream) {
       videoRef.current.srcObject = remoteStream;
+      videoRef.current.muted = true; // Start muted to ensure 100% immediate video playback
       videoRef.current
         .play()
         .then(() => {
-          setAudioBlocked(false);
           setConnectionStatus("connected");
+          if (videoRef.current && !isMuted) {
+            videoRef.current.muted = false;
+          }
         })
         .catch((err) => {
-          console.warn("Autoplay blocked, prompting user:", err);
+          console.warn("Autoplay with audio blocked, playing muted video:", err);
           setAudioBlocked(true);
+          if (videoRef.current) {
+            videoRef.current.muted = true;
+            videoRef.current.play().catch(() => {});
+          }
         });
     }
-  }, [remoteStream]);
+  }, [remoteStream, isMuted]);
 
   // Handle guest volume and mute adjustments
   useEffect(() => {
@@ -518,7 +528,7 @@ export default function SessionPage() {
     (stream: MediaStream) => {
       gameStreamRef.current = stream;
       const guestsToOffer = new Set(pendingGuestsRef.current);
-      participants.forEach((p) => {
+      participantsRef.current.forEach((p) => {
         if (p.peerId !== myPeerId.current) {
           guestsToOffer.add(p.peerId);
         }
@@ -528,8 +538,9 @@ export default function SessionPage() {
       }
       pendingGuestsRef.current.clear();
     },
-    [createHostOffer, participants],
+    [createHostOffer],
   );
+
 
   // Late audio track addition from emulator
   const handleAudioTrackAdded = useCallback((track: MediaStreamTrack) => {
@@ -767,13 +778,13 @@ export default function SessionPage() {
   const unlockAudio = () => {
     if (videoRef.current) {
       videoRef.current.muted = false;
+      videoRef.current.volume = volume;
       setIsMuted(false);
-      videoRef.current
-        .play()
-        .then(() => setAudioBlocked(false))
-        .catch(() => {});
+      setAudioBlocked(false);
+      videoRef.current.play().catch(() => {});
     }
   };
+
 
   const toggleFullscreen = () => {
     if (!videoContainerRef.current) return;
