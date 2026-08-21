@@ -233,15 +233,20 @@ export function attachSignalingServer(server: Server) {
       if (type === "slot-claim") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
         const slot = Number(msg.slot); // 1, 2, 3, 4
-        if (!sessionCode || slot < 1 || slot > 4 || !myPeerId) return;
+        const effectivePeerId = (msg.peerId as string) || myPeerId;
+        const effectivePlayerName = (msg.playerName as string) || myPlayerName || "Player";
 
-        const room = rooms.get(sessionCode);
-        if (!room) return;
+        if (!sessionCode || slot < 1 || slot > 4 || !effectivePeerId) return;
 
-        // Check if slot is occupied
+        myPeerId = effectivePeerId;
+        mySessionCode = sessionCode;
+        myPlayerName = effectivePlayerName;
+
+        const room = getOrCreateRoom(sessionCode);
+
+        // Check if slot is occupied by another peer
         const existing = room.slots[slot];
-        if (existing && existing.peerId !== myPeerId) {
-          // Slot is already taken
+        if (existing && existing.peerId !== effectivePeerId) {
           ws.send(
             JSON.stringify({
               type: "error",
@@ -253,19 +258,19 @@ export function attachSignalingServer(server: Server) {
 
         // Release any other slot held by this peer
         for (let i = 1; i <= 4; i++) {
-          if (room.slots[i]?.peerId === myPeerId && i !== slot) {
+          if (room.slots[i]?.peerId === effectivePeerId && i !== slot) {
             room.slots[i] = null;
           }
         }
 
-        const isHost = myPeerId === room.hostPeerId;
+        const isHost = effectivePeerId === room.hostPeerId;
         room.slots[slot] = {
-          peerId: myPeerId,
-          playerName: myPlayerName,
+          peerId: effectivePeerId,
+          playerName: effectivePlayerName,
           isHost,
         };
 
-        logger.info({ sessionCode, peerId: myPeerId, slot, playerName: myPlayerName }, "Slot claimed");
+        logger.info({ sessionCode, peerId: effectivePeerId, slot, playerName: effectivePlayerName }, "Slot claimed");
 
         broadcastToRoom(room, {
           type: "slot-state",
@@ -277,7 +282,7 @@ export function attachSignalingServer(server: Server) {
           id: crypto.randomUUID(),
           senderId: "system",
           senderName: "SYSTEM",
-          text: `🎮 ${myPlayerName} claimed Player ${slot} controller`,
+          text: `🎮 ${effectivePlayerName} claimed Player ${slot} controller`,
           timestamp: Date.now(),
           isSystem: true,
         });
@@ -288,21 +293,24 @@ export function attachSignalingServer(server: Server) {
       if (type === "slot-release") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
         const slot = Number(msg.slot);
-        if (!sessionCode || !myPeerId) return;
+        const effectivePeerId = (msg.peerId as string) || myPeerId;
+        const effectivePlayerName = (msg.playerName as string) || myPlayerName || "Player";
+
+        if (!sessionCode || !effectivePeerId) return;
 
         const room = rooms.get(sessionCode);
         if (!room) return;
 
         let releasedSlot = 0;
         if (slot >= 1 && slot <= 4) {
-          if (room.slots[slot]?.peerId === myPeerId) {
+          if (room.slots[slot]?.peerId === effectivePeerId) {
             room.slots[slot] = null;
             releasedSlot = slot;
           }
         } else {
           // Release any slot held
           for (let i = 1; i <= 4; i++) {
-            if (room.slots[i]?.peerId === myPeerId) {
+            if (room.slots[i]?.peerId === effectivePeerId) {
               room.slots[i] = null;
               releasedSlot = i;
             }
@@ -320,7 +328,7 @@ export function attachSignalingServer(server: Server) {
             id: crypto.randomUUID(),
             senderId: "system",
             senderName: "SYSTEM",
-            text: `👁️ ${myPlayerName} released Player ${releasedSlot} controller (now spectating)`,
+            text: `👁️ ${effectivePlayerName} released Player ${releasedSlot} controller (now spectating)`,
             timestamp: Date.now(),
             isSystem: true,
           });
@@ -328,6 +336,7 @@ export function attachSignalingServer(server: Server) {
 
         return;
       }
+
 
       if (type === "chat") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();

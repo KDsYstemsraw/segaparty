@@ -3,9 +3,14 @@ export const RTC_CONFIG: RTCConfiguration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" },
     { urls: "stun:stun.cloudflare.com:3478" },
+    { urls: "stun:openrelay.metered.ca:80" },
   ],
+  iceCandidatePoolSize: 10,
 };
+
 
 export function getWsUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";

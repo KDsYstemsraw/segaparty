@@ -107,6 +107,8 @@ export default function SessionPage() {
   const gameStreamRef = useRef<MediaStream | null>(null);
   const pendingGuestsRef = useRef<Set<string>>(new Set());
   const guestDataChannelRef = useRef<RTCDataChannel | null>(null);
+  const iceCandidateQueueRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+
 
   const joinSession = useJoinSession();
 
@@ -191,100 +193,179 @@ export default function SessionPage() {
   // Host creates WebRTC Offer for a connected guest
   const createHostOffer = useCallback(
     async (guestPeerId: string, stream: MediaStream | null) => {
-      const pc = new RTCPeerConnection(RTC_CONFIG);
-      peerConnsRef.current.set(guestPeerId, pc);
+      try {
+        const pc = new RTCPeerConnection(RTC_CONFIG);
+        peerConnsRef.current.set(guestPeerId, pc);
 
-      // Create low-latency data channel for inputs
-      const dc = pc.createDataChannel("inputs", {
-        ordered: false,
-        maxRetransmits: 0,
-      });
-      dataChannelsRef.current.set(guestPeerId, dc);
+        // Create low-latency data channel for inputs
+        const dc = pc.createDataChannel("inputs", {
+          ordered: false,
+          maxRetransmits: 0,
+        });
+        dataChannelsRef.current.set(guestPeerId, dc);
 
-      dc.onmessage = (e) => {
-        try {
-          const input = JSON.parse(e.data) as PlayerInputEvent;
-          // Look up mapped key for the player slot and dispatch
-          const keyInfo = getPlayerActionKey(input.playerIndex, input.action);
-          if (keyInfo) {
-            window.dispatchEvent(
-              new KeyboardEvent(input.type, {
-                key: keyInfo.key,
-                keyCode: keyInfo.keyCode,
-                code: keyInfo.code,
-                bubbles: true,
-              }),
-            );
+        dc.onmessage = (e) => {
+          try {
+            const input = JSON.parse(e.data) as PlayerInputEvent;
+            const keyInfo = getPlayerActionKey(input.playerIndex, input.action);
+            if (keyInfo) {
+              window.dispatchEvent(
+                new KeyboardEvent(input.type, {
+                  key: keyInfo.key,
+                  keyCode: keyInfo.keyCode,
+                  code: keyInfo.code,
+                  bubbles: true,
+                }),
+              );
+            }
+          } catch {}
+        };
+
+        if (stream) {
+          for (const track of stream.getTracks()) {
+            pc.addTrack(track, stream);
           }
-        } catch {}
-      };
-
-      if (stream) {
-        for (const track of stream.getTracks()) {
-          pc.addTrack(track, stream);
         }
+
+        pc.onicecandidate = (e) => {
+          if (e.candidate) {
+            sendSignal(guestPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          loggerDebug(`Host ICE with ${guestPeerId}: ${pc.iceConnectionState}`);
+        };
+
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: false,
+          offerToReceiveVideo: false,
+        });
+        await pc.setLocalDescription(offer);
+        sendSignal(guestPeerId, { type: "offer", sdp: pc.localDescription });
+      } catch (err) {
+        console.error("Error creating host offer:", err);
       }
-
-      pc.onicecandidate = (e) => {
-        if (e.candidate) {
-          sendSignal(guestPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
-        }
-      };
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      sendSignal(guestPeerId, { type: "offer", sdp: pc.localDescription });
     },
     [sendSignal],
   );
 
+  // Helper debug log
+  const loggerDebug = (msg: string) => {
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[WebRTC] ${msg}`);
+    }
+  };
+
   // Handle incoming signaling messages from peers
   const handleSignal = useCallback(
     async (fromPeerId: string, data: Record<string, unknown>) => {
-      if (data.type === "offer" && !isHost) {
-        const pc = new RTCPeerConnection(RTC_CONFIG);
-        peerConnsRef.current.set(fromPeerId, pc);
+      try {
+        if (data.type === "offer" && !isHost) {
+          const pc = new RTCPeerConnection(RTC_CONFIG);
+          peerConnsRef.current.set(fromPeerId, pc);
 
-        pc.ontrack = (e) => {
-          if (e.streams[0]) {
-            setRemoteStream(e.streams[0]);
-            setConnectionStatus("connected");
+          pc.ontrack = (e) => {
+            if (e.streams && e.streams[0]) {
+              setRemoteStream(e.streams[0]);
+              setConnectionStatus("connected");
+            } else if (e.track) {
+              setRemoteStream((prev) => {
+                const s = prev || new MediaStream();
+                if (!s.getTracks().includes(e.track)) {
+                  s.addTrack(e.track);
+                }
+                return s;
+              });
+              setConnectionStatus("connected");
+            }
+          };
+
+          pc.ondatachannel = (e) => {
+            guestDataChannelRef.current = e.channel;
+          };
+
+          pc.onicecandidate = (e) => {
+            if (e.candidate) {
+              sendSignal(fromPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
+            }
+          };
+
+          pc.oniceconnectionstatechange = () => {
+            if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+              setConnectionStatus("connected");
+            } else if (pc.iceConnectionState === "failed") {
+              setConnectionStatus("error");
+            }
+          };
+
+          pc.onconnectionstatechange = () => {
+            if (pc.connectionState === "connected") {
+              setConnectionStatus("connected");
+            } else if (pc.connectionState === "failed") {
+              setConnectionStatus("error");
+            }
+          };
+
+          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
+
+          // Flush any queued ICE candidates for this peer
+          const queued = iceCandidateQueueRef.current.get(fromPeerId) || [];
+          for (const cand of queued) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(cand));
+            } catch (candErr) {
+              console.warn("Error adding queued ICE candidate:", candErr);
+            }
           }
-        };
+          iceCandidateQueueRef.current.delete(fromPeerId);
 
-        pc.ondatachannel = (e) => {
-          guestDataChannelRef.current = e.channel;
-        };
-
-        pc.onicecandidate = (e) => {
-          if (e.candidate) {
-            sendSignal(fromPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
-          }
-        };
-
-        pc.onconnectionstatechange = () => {
-          if (pc.connectionState === "failed") setConnectionStatus("error");
-        };
-
-        await pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sendSignal(fromPeerId, { type: "answer", sdp: pc.localDescription });
-        return;
-      }
-
-      if (data.type === "answer" && isHost) {
-        const pc = peerConnsRef.current.get(fromPeerId);
-        if (pc) await pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
-        return;
-      }
-
-      if (data.type === "ice-candidate") {
-        const pc = peerConnsRef.current.get(fromPeerId);
-        if (pc && data.candidate) {
-          await pc.addIceCandidate(data.candidate as RTCIceCandidateInit);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          sendSignal(fromPeerId, { type: "answer", sdp: pc.localDescription });
+          return;
         }
-        return;
+
+        if (data.type === "answer" && isHost) {
+          const pc = peerConnsRef.current.get(fromPeerId);
+          if (pc) {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
+
+            // Flush any queued ICE candidates for this peer
+            const queued = iceCandidateQueueRef.current.get(fromPeerId) || [];
+            for (const cand of queued) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand));
+              } catch (candErr) {
+                console.warn("Error adding queued ICE candidate on host:", candErr);
+              }
+            }
+            iceCandidateQueueRef.current.delete(fromPeerId);
+          }
+          return;
+        }
+
+        if (data.type === "ice-candidate") {
+          const candidate = data.candidate as RTCIceCandidateInit;
+          if (!candidate) return;
+
+          const pc = peerConnsRef.current.get(fromPeerId);
+          if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (err) {
+              console.warn("Error adding immediate ICE candidate:", err);
+            }
+          } else {
+            // Buffer candidate until remote description is set
+            const q = iceCandidateQueueRef.current.get(fromPeerId) || [];
+            q.push(candidate);
+            iceCandidateQueueRef.current.set(fromPeerId, q);
+          }
+          return;
+        }
+      } catch (signalErr) {
+        console.error("Signal processing error:", signalErr);
       }
     },
     [isHost, sendSignal],
@@ -354,6 +435,10 @@ export default function SessionPage() {
           }
         }
 
+        if (msg.type === "host-info" && !isHost) {
+          setConnectionStatus("connecting");
+        }
+
         if (msg.type === "no-host" && !isHost) {
           setConnectionStatus("error");
           toast({
@@ -376,6 +461,7 @@ export default function SessionPage() {
           }
           dataChannelsRef.current.delete(peerId);
           pendingGuestsRef.current.delete(peerId);
+          iceCandidateQueueRef.current.delete(peerId);
           setParticipants((prev) => prev.filter((p) => p.peerId !== peerId));
 
           if (!isHost && peerId === session.hostId) {
@@ -394,19 +480,51 @@ export default function SessionPage() {
       peerConnsRef.current.forEach((pc) => pc.close());
       peerConnsRef.current.clear();
       dataChannelsRef.current.clear();
+      iceCandidateQueueRef.current.clear();
     };
-  }, [code, isHost, myPlayerName, session?.code]);
+  }, [code, isHost, myPlayerName, session?.code, createHostOffer, handleSignal, toast]);
 
-  // When Host's emulator stream is ready, create offers for waiting guests
+  // Bind remote stream to HTML5 video element with auto-recovery
+  useEffect(() => {
+    if (videoRef.current && remoteStream) {
+      videoRef.current.srcObject = remoteStream;
+      videoRef.current
+        .play()
+        .then(() => {
+          setAudioBlocked(false);
+          setConnectionStatus("connected");
+        })
+        .catch((err) => {
+          console.warn("Autoplay blocked, prompting user:", err);
+          setAudioBlocked(true);
+        });
+    }
+  }, [remoteStream]);
+
+  // Handle guest volume and mute adjustments
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = isMuted ? 0 : volume;
+      videoRef.current.muted = isMuted;
+    }
+  }, [volume, isMuted]);
+
+  // When Host's emulator stream is ready, create offers for all connected guests
   const handleStreamReady = useCallback(
     (stream: MediaStream) => {
       gameStreamRef.current = stream;
-      for (const guestPeerId of pendingGuestsRef.current) {
+      const guestsToOffer = new Set(pendingGuestsRef.current);
+      participants.forEach((p) => {
+        if (p.peerId !== myPeerId.current) {
+          guestsToOffer.add(p.peerId);
+        }
+      });
+      for (const guestPeerId of guestsToOffer) {
         createHostOffer(guestPeerId, stream);
       }
       pendingGuestsRef.current.clear();
     },
-    [createHostOffer],
+    [createHostOffer, participants],
   );
 
   // Late audio track addition from emulator
@@ -435,11 +553,13 @@ export default function SessionPage() {
             type: "slot-claim",
             sessionCode: code,
             slot: slotNumber,
+            peerId: myPeerId.current,
+            playerName: myPlayerName,
           }),
         );
       }
     },
-    [code],
+    [code, myPlayerName],
   );
 
   // Release Controller Slot
@@ -451,12 +571,15 @@ export default function SessionPage() {
             type: "slot-release",
             sessionCode: code,
             slot: slotNumber,
+            peerId: myPeerId.current,
+            playerName: myPlayerName,
           }),
         );
       }
     },
-    [code],
+    [code, myPlayerName],
   );
+
 
   // Send Text Chat Message
   const handleSendMessage = useCallback(

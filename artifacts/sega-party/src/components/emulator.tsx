@@ -138,10 +138,16 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
 
     const tryCapture = (): boolean => {
       if (streamReadyFired.current || !onStreamReady) return true;
-      const canvas = document.querySelector("#game canvas") as HTMLCanvasElement | null;
+      const canvas = (document.querySelector("#game canvas") ||
+        document.querySelector("canvas") ||
+        (document.querySelector("#game iframe") as HTMLIFrameElement)?.contentDocument?.querySelector("canvas")) as HTMLCanvasElement | null;
       if (!canvas) return false;
+
       try {
-        const videoStream = canvas.captureStream(60);
+        const captureFn = canvas.captureStream || (canvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
+        if (!captureFn) return false;
+
+        const videoStream = captureFn.call(canvas, 60);
         if (videoStream.getVideoTracks().length === 0) return false;
 
         const composite = new MediaStream();
@@ -171,15 +177,17 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
               clearInterval(audioPoll);
             }
           }
-        }, 1000);
+        }, 800);
 
-        setTimeout(() => clearInterval(audioPoll), 15000);
+        setTimeout(() => clearInterval(audioPoll), 20000);
 
         return true;
-      } catch {
+      } catch (err) {
+        console.warn("Capture stream attempt error:", err);
         return false;
       }
     };
+
 
     if (onStreamReady) {
       window.EJS_onGameStart = () => {
