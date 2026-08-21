@@ -293,7 +293,7 @@ export default function SessionPage() {
 
         if (stream) {
           for (const track of stream.getTracks()) {
-            pc.addTransceiver(track, { direction: "sendonly", streams: [stream] });
+            pc.addTrack(track, stream);
           }
         }
 
@@ -308,10 +308,7 @@ export default function SessionPage() {
           setWebrtcStatus((prev) => ({ ...prev, ice: pc.iceConnectionState }));
         };
 
-        const offer = await pc.createOffer({
-          offerToReceiveAudio: false,
-          offerToReceiveVideo: false,
-        });
+        const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         setWebrtcStatus((prev) => ({ ...prev, lastSignal: `Sent Offer (${stream?.getTracks().length || 0} tracks)` }));
         sendSignal(guestPeerId, { type: "offer", sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp } });
@@ -341,9 +338,6 @@ export default function SessionPage() {
           if (!pc) {
             pc = new RTCPeerConnection(RTC_CONFIG);
             peerConnsRef.current.set(fromPeerId, pc);
-
-            pc.addTransceiver("video", { direction: "recvonly" });
-            pc.addTransceiver("audio", { direction: "recvonly" });
 
             pc.ontrack = (e) => {
               setWebrtcStatus((prev) => ({ ...prev, tracks: prev.tracks + 1 }));
@@ -1056,6 +1050,7 @@ export default function SessionPage() {
                       className="w-full h-full object-contain"
                       autoPlay
                       playsInline
+                      muted
                     />
 
                     {/* CRT Scanline Filter */}
