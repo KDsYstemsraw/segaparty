@@ -543,7 +543,9 @@ export default function SessionPage() {
   // Bind remote stream to HTML5 video element with auto-recovery
   useEffect(() => {
     if (videoRef.current && remoteStream) {
-      videoRef.current.srcObject = remoteStream;
+      if (videoRef.current.srcObject !== remoteStream) {
+        videoRef.current.srcObject = remoteStream;
+      }
       videoRef.current.muted = true; // Start muted to ensure immediate playback
       videoRef.current
         .play()
@@ -964,6 +966,7 @@ export default function SessionPage() {
                       className="w-full h-full object-contain"
                       autoPlay
                       playsInline
+                      muted
                     />
 
                     {/* CRT Scanline Filter */}
