@@ -168,40 +168,60 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
 
     const tryCapture = (): boolean => {
       if (streamReadyFired.current || !onStreamReadyRef.current) return true;
-      // Only look inside #game — never grab unrelated canvas elements
-      const sourceCanvas = document.querySelector("#game canvas") as HTMLCanvasElement | null;
+
+      const ejs = (window as unknown as {
+        EJS_emulator?: {
+          canvas?: HTMLCanvasElement;
+          collectScreenRecordingMediaTracks?: (canvas: HTMLCanvasElement, fps: number) => MediaStream;
+        };
+      }).EJS_emulator;
+
+      const sourceCanvas = ejs?.canvas || (document.querySelector("#game canvas") as HTMLCanvasElement | null);
       if (!sourceCanvas) return false;
 
       try {
-        const captureFn = sourceCanvas.captureStream || (sourceCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
-        if (!captureFn) return false;
-
-        const videoStream = captureFn.call(sourceCanvas, 60);
-        if (videoStream.getVideoTracks().length === 0) return false;
-
-        const composite = new MediaStream();
-        videoStream.getVideoTracks().forEach((vt) => composite.addTrack(vt));
-
-        // Add captured audio track if available
-        let audioAlreadyAttached = false;
-        if (window.__emulatorAudioStream) {
-          const audioTracks = window.__emulatorAudioStream.getAudioTracks();
-          if (audioTracks.length > 0) {
-            composite.addTrack(audioTracks[0]);
-            audioAlreadyAttached = true;
-          }
+        let stream: MediaStream | null = null;
+        if (typeof ejs?.collectScreenRecordingMediaTracks === "function") {
+          stream = ejs.collectScreenRecordingMediaTracks(sourceCanvas, 60);
         }
+
+        if (!stream || stream.getVideoTracks().length === 0) {
+          const captureFn = sourceCanvas.captureStream || (sourceCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
+          if (!captureFn) return false;
+
+          const videoStream = captureFn.call(sourceCanvas, 60);
+          if (videoStream.getVideoTracks().length === 0) return false;
+
+          const composite = new MediaStream();
+          videoStream.getVideoTracks().forEach((vt) => composite.addTrack(vt));
+          if (window.__emulatorAudioStream) {
+            window.__emulatorAudioStream.getAudioTracks().forEach((at) => composite.addTrack(at));
+          }
+          stream = composite;
+        }
+
+        if (!stream || stream.getVideoTracks().length === 0) return false;
 
         streamReadyFired.current = true;
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
         }
-        onStreamReadyRef.current(composite);
+        onStreamReadyRef.current(stream);
 
-        // Only poll for late audio if it wasn't already attached
-        if (!audioAlreadyAttached) {
+        // Check for late OpenAL audio if not yet present in initial stream
+        if (stream.getAudioTracks().length === 0) {
           audioPollId = setInterval(() => {
+            if (ejs && typeof ejs.collectScreenRecordingMediaTracks === "function" && sourceCanvas && onAudioTrackAddedRef.current) {
+              const fullStream = ejs.collectScreenRecordingMediaTracks(sourceCanvas, 60);
+              const audioTracks = fullStream?.getAudioTracks() || [];
+              if (audioTracks.length > 0) {
+                onAudioTrackAddedRef.current(audioTracks[0]);
+                if (audioPollId) clearInterval(audioPollId);
+                audioPollId = null;
+                return;
+              }
+            }
             if (window.__emulatorAudioStream && onAudioTrackAddedRef.current) {
               const audioTracks = window.__emulatorAudioStream.getAudioTracks();
               if (audioTracks.length > 0) {
