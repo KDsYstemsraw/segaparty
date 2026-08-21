@@ -957,7 +957,12 @@ export default function SessionPage() {
               // Guest Stream View
               <div
                 ref={videoContainerRef}
-                className="w-full aspect-[4/3] max-w-4xl mx-auto bg-black border-4 border-primary rounded-lg shadow-[0_0_30px_rgba(0,71,187,0.4)] relative overflow-hidden group flex items-center justify-center"
+                onClick={() => {
+                  if (isMuted || audioBlocked) {
+                    unlockAudio();
+                  }
+                }}
+                className="w-full aspect-[4/3] max-w-4xl mx-auto bg-black border-4 border-primary rounded-lg shadow-[0_0_30px_rgba(0,71,187,0.4)] relative overflow-hidden group flex items-center justify-center cursor-pointer"
               >
                 {remoteStream ? (
                   <>
