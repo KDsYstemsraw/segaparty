@@ -380,6 +380,9 @@ export default function SessionPage() {
     setConnectionStatus("connecting");
 
     ws.onopen = () => {
+      if (isHost) {
+        setConnectionStatus("connected");
+      }
       ws.send(
         JSON.stringify({
           type: "join",
@@ -391,6 +394,7 @@ export default function SessionPage() {
         }),
       );
     };
+
 
     ws.onmessage = (event) => {
       try {
