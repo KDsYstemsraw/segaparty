@@ -181,6 +181,11 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
 
       captureCanvas.width = sourceCanvas.width || 640;
       captureCanvas.height = sourceCanvas.height || 480;
+      if (captureCtx) {
+        captureCtx.fillStyle = "#000000";
+        captureCtx.fillRect(0, 0, captureCanvas.width, captureCanvas.height);
+        captureCtx.imageSmoothingEnabled = false;
+      }
 
       const copyFrame = () => {
         if (sourceCanvas && sourceCanvas.width > 0 && sourceCanvas.height > 0) {
