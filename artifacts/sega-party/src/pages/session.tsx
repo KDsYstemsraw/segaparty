@@ -341,33 +341,31 @@ export default function SessionPage() {
 
             pc.ontrack = (e) => {
               setWebrtcStatus((prev) => ({ ...prev, tracks: prev.tracks + 1 }));
-              if (e.streams && e.streams[0]) {
-                const stream = e.streams[0];
-                setRemoteStream(stream);
-                setConnectionStatus("connected");
+              const stream = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
 
-                e.track.addEventListener("unmute", () => {
-                  if (videoRef.current) {
+              setRemoteStream((prev) => {
+                const combined = new MediaStream(prev ? prev.getTracks() : []);
+                if (!combined.getTracks().some((t) => t.id === e.track.id)) {
+                  combined.addTrack(e.track);
+                }
+                return combined;
+              });
+              setConnectionStatus("connected");
+
+              const bindVideo = () => {
+                if (videoRef.current) {
+                  if (videoRef.current.srcObject !== stream) {
                     videoRef.current.srcObject = stream;
-                    videoRef.current.play().catch(() => {});
                   }
-                }, { once: true });
-              } else if (e.track) {
-                setRemoteStream((prev) => {
-                  const newStream = new MediaStream(prev ? prev.getTracks() : []);
-                  if (!newStream.getTracks().some((t) => t.id === e.track.id)) {
-                    newStream.addTrack(e.track);
-                  }
-                  e.track.addEventListener("unmute", () => {
-                    if (videoRef.current) {
-                      videoRef.current.srcObject = newStream;
-                      videoRef.current.play().catch(() => {});
-                    }
-                  }, { once: true });
-                  return newStream;
-                });
-                setConnectionStatus("connected");
-              }
+                  videoRef.current.play().catch(() => {});
+                }
+              };
+
+              // Immediately bind
+              bindVideo();
+
+              // Fallback to unmute event
+              e.track.addEventListener("unmute", bindVideo, { once: true });
             };
 
             pc.ondatachannel = (e) => {
