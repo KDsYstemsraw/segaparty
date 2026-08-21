@@ -1,5 +1,4 @@
 (async function() {
-    if (window.EmulatorJS) { return; }
     const scripts = [
         "emulator.js",
         "nipplejs.js",
@@ -56,12 +55,13 @@
         });
     }
 
-    // Sequentially load all modular scripts
-    for (let i = 0; i < scripts.length; i++) {
-        await loadScript(scripts[i]);
+    // Only load modular script and style assets if not already present
+    if (!window.EmulatorJS) {
+        for (let i = 0; i < scripts.length; i++) {
+            await loadScript(scripts[i]);
+        }
+        await loadStyle("emulator.css");
     }
-
-    await loadStyle("emulator.css");
 
     const config = {};
 

@@ -3,7 +3,7 @@ let romFileName: string | null = null;
 
 export function setRom(file: File): Promise<string> {
   return new Promise((resolve) => {
-    if (romBlobUrl) URL.revokeObjectURL(romBlobUrl);
+    if (romBlobUrl && romBlobUrl.startsWith("blob:")) URL.revokeObjectURL(romBlobUrl);
     const url = URL.createObjectURL(file);
     romBlobUrl = url;
     romFileName = file.name;
@@ -12,13 +12,13 @@ export function setRom(file: File): Promise<string> {
 }
 
 export function setRomFromUrl(url: string, name: string): void {
-  if (romBlobUrl) URL.revokeObjectURL(romBlobUrl);
+  if (romBlobUrl && romBlobUrl.startsWith("blob:")) URL.revokeObjectURL(romBlobUrl);
   romBlobUrl = url;
   romFileName = name;
 }
 
 export function setRomFromBuffer(buffer: ArrayBuffer, name: string): string {
-  if (romBlobUrl) URL.revokeObjectURL(romBlobUrl);
+  if (romBlobUrl && romBlobUrl.startsWith("blob:")) URL.revokeObjectURL(romBlobUrl);
   const blob = new Blob([buffer], { type: "application/octet-stream" });
   const url = URL.createObjectURL(blob);
   romBlobUrl = url;
@@ -35,7 +35,7 @@ export function getRomName(): string | null {
 }
 
 export function clearRom() {
-  if (romBlobUrl) {
+  if (romBlobUrl && romBlobUrl.startsWith("blob:")) {
     URL.revokeObjectURL(romBlobUrl);
     romBlobUrl = null;
   }
