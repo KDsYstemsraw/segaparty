@@ -123,9 +123,9 @@ class EmulatorJS {
                         res = await res.text();
                         try { res = JSON.parse(res) } catch(e) {}
                     }
-                    if (path.startsWith("blob:")) URL.revokeObjectURL(path);
                     cb({ data: res, headers: {} });
                 } catch(e) {
+                    console.warn("downloadFile blob fetch error:", e);
                     cb(-1);
                 }
                 return;
@@ -141,6 +141,7 @@ class EmulatorJS {
                 if (xhr.readyState === xhr.DONE) {
                     let data = xhr.response;
                     if (xhr.status.toString().startsWith("4") || xhr.status.toString().startsWith("5")) {
+                        console.warn("downloadFile HTTP status error:", xhr.status, path);
                         cb(-1);
                         return;
                     }
@@ -153,12 +154,16 @@ class EmulatorJS {
                     });
                 }
             }
+            xhr.onerror = (err) => {
+                console.warn("downloadFile XHR network error for path:", path, err);
+                cb(-1);
+            };
+            xhr.open(opts.method || "GET", path, true);
             if (opts.responseType) xhr.responseType = opts.responseType;
-            xhr.onerror = () => cb(-1);
-            xhr.open(opts.method, path, true);
             xhr.send();
         })
     }
+
     toData(data, rv) {
         if (!(data instanceof ArrayBuffer) && !(data instanceof Uint8Array) && !(data instanceof Blob)) return null;
         if (rv) return true;
