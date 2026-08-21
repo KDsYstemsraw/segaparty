@@ -1,6 +1,5 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
-import { sessionsTable } from "@workspace/db";
+import { db, hasDatabase, sessionsTable, type Session } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import {
   CreateSessionBody,
@@ -13,6 +12,9 @@ import {
 
 const router = Router();
 
+// In-memory fallback session store when DATABASE_URL is not configured
+const inMemorySessions = new Map<string, Session>();
+
 function generateCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -24,6 +26,15 @@ function generateCode(): string {
 
 function generatePlayerId(): string {
   return crypto.randomUUID();
+}
+
+async function findSession(code: string): Promise<Session | undefined> {
+  const upperCode = code.toUpperCase();
+  if (hasDatabase && db) {
+    const sessions = await db.select().from(sessionsTable).where(eq(sessionsTable.code, upperCode));
+    return sessions[0];
+  }
+  return inMemorySessions.get(upperCode);
 }
 
 // Create session
@@ -42,8 +53,8 @@ router.post("/sessions", async (req, res) => {
   let attempts = 0;
   do {
     code = generateCode();
-    const existing = await db.select().from(sessionsTable).where(eq(sessionsTable.code, code));
-    if (existing.length === 0) break;
+    const existing = await findSession(code);
+    if (!existing) break;
     attempts++;
   } while (attempts < 10);
 
@@ -56,22 +67,31 @@ router.post("/sessions", async (req, res) => {
     },
   ];
 
-  await db.insert(sessionsTable).values({
+  const newSession: Session = {
     code,
     hostId: playerId,
     players,
     maxPlayers,
-  });
+    createdAt: new Date(),
+  };
 
-  const session = await db.select().from(sessionsTable).where(eq(sessionsTable.code, code));
+  if (hasDatabase && db) {
+    await db.insert(sessionsTable).values({
+      code,
+      hostId: playerId,
+      players,
+      maxPlayers,
+    });
+  } else {
+    inMemorySessions.set(code, newSession);
+  }
 
-  const s = session[0];
   res.status(201).json({
-    code: s.code,
-    hostId: s.hostId,
-    players: s.players,
-    maxPlayers: s.maxPlayers,
-    createdAt: s.createdAt.toISOString(),
+    code: newSession.code,
+    hostId: newSession.hostId,
+    players: newSession.players,
+    maxPlayers: newSession.maxPlayers,
+    createdAt: newSession.createdAt.toISOString(),
     playerId,
   });
 });
@@ -84,21 +104,20 @@ router.get("/sessions/:code", async (req, res) => {
     return;
   }
 
-  const { code } = parsed.data;
-  const sessions = await db.select().from(sessionsTable).where(eq(sessionsTable.code, code));
+  const code = parsed.data.code.toUpperCase();
+  const session = await findSession(code);
 
-  if (sessions.length === 0) {
+  if (!session) {
     res.status(404).json({ error: "Session not found" });
     return;
   }
 
-  const s = sessions[0];
   res.json({
-    code: s.code,
-    hostId: s.hostId,
-    players: s.players,
-    maxPlayers: s.maxPlayers,
-    createdAt: s.createdAt.toISOString(),
+    code: session.code,
+    hostId: session.hostId,
+    players: session.players,
+    maxPlayers: session.maxPlayers,
+    createdAt: session.createdAt.toISOString(),
   });
 });
 
@@ -112,16 +131,15 @@ router.post("/sessions/:code/join", async (req, res) => {
     return;
   }
 
-  const { code } = paramsParsed.data;
+  const code = paramsParsed.data.code.toUpperCase();
   const { playerName } = bodyParsed.data;
 
-  const sessions = await db.select().from(sessionsTable).where(eq(sessionsTable.code, code));
-  if (sessions.length === 0) {
+  const session = await findSession(code);
+  if (!session) {
     res.status(404).json({ error: "Session not found" });
     return;
   }
 
-  const session = sessions[0];
   const players = session.players as Array<{ id: string; name: string; isHost: boolean; playerIndex: number }>;
 
   if (players.length >= session.maxPlayers) {
@@ -142,18 +160,20 @@ router.post("/sessions/:code/join", async (req, res) => {
     },
   ];
 
-  await db.update(sessionsTable).set({ players: updatedPlayers }).where(eq(sessionsTable.code, code));
-
-  const updated = await db.select().from(sessionsTable).where(eq(sessionsTable.code, code));
-  const s = updated[0];
+  if (hasDatabase && db) {
+    await db.update(sessionsTable).set({ players: updatedPlayers }).where(eq(sessionsTable.code, code));
+  } else {
+    session.players = updatedPlayers;
+    inMemorySessions.set(code, session);
+  }
 
   res.json({
     session: {
-      code: s.code,
-      hostId: s.hostId,
-      players: s.players,
-      maxPlayers: s.maxPlayers,
-      createdAt: s.createdAt.toISOString(),
+      code: session.code,
+      hostId: session.hostId,
+      players: updatedPlayers,
+      maxPlayers: session.maxPlayers,
+      createdAt: session.createdAt.toISOString(),
     },
     playerId,
   });
@@ -169,27 +189,36 @@ router.post("/sessions/:code/leave", async (req, res) => {
     return;
   }
 
-  const { code } = paramsParsed.data;
+  const code = paramsParsed.data.code.toUpperCase();
   const { playerId } = bodyParsed.data;
 
-  const sessions = await db.select().from(sessionsTable).where(eq(sessionsTable.code, code));
-  if (sessions.length === 0) {
+  const session = await findSession(code);
+  if (!session) {
     res.status(404).json({ error: "Session not found" });
     return;
   }
 
-  const session = sessions[0];
   const players = session.players as Array<{ id: string; name: string; isHost: boolean; playerIndex: number }>;
   const updatedPlayers = players.filter((p) => p.id !== playerId);
 
   // If host left or no players, delete session
   if (playerId === session.hostId || updatedPlayers.length === 0) {
-    await db.delete(sessionsTable).where(eq(sessionsTable.code, code));
+    if (hasDatabase && db) {
+      await db.delete(sessionsTable).where(eq(sessionsTable.code, code));
+    } else {
+      inMemorySessions.delete(code);
+    }
   } else {
-    await db.update(sessionsTable).set({ players: updatedPlayers }).where(eq(sessionsTable.code, code));
+    if (hasDatabase && db) {
+      await db.update(sessionsTable).set({ players: updatedPlayers }).where(eq(sessionsTable.code, code));
+    } else {
+      session.players = updatedPlayers;
+      inMemorySessions.set(code, session);
+    }
   }
 
   res.json({ success: true });
 });
 
 export default router;
+

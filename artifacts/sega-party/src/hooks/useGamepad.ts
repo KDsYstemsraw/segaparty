@@ -1,30 +1,55 @@
 import { useEffect, useRef } from "react";
-import { loadMapping, GAME_ACTIONS } from "@/lib/gamepadMapping";
-import type { InputEvent } from "@/lib/webrtc";
+import { loadMapping, getPlayerActionKey } from "@/lib/gamepadMapping";
+import type { PlayerInputEvent } from "@/lib/webrtc";
 
 const AXIS_THRESHOLD = 0.5;
 
-export function useGamepad(onInput: (event: InputEvent) => void) {
+export function useGamepad(
+  playerSlot: number | null,
+  onInput: (event: PlayerInputEvent) => void,
+  onButtonActivity?: (action: string, isDown: boolean) => void,
+) {
   const onInputRef = useRef(onInput);
   onInputRef.current = onInput;
+
+  const onActivityRef = useRef(onButtonActivity);
+  onActivityRef.current = onButtonActivity;
+
+  const slotRef = useRef(playerSlot);
+  slotRef.current = playerSlot;
 
   useEffect(() => {
     const pressed = new Map<string, boolean>();
     let rafId: number;
     let mapping = loadMapping();
 
-    const reloadMapping = () => { mapping = loadMapping(); };
+    const reloadMapping = () => {
+      mapping = loadMapping();
+    };
     window.addEventListener("storage", reloadMapping);
-    // Also reload when localStorage is changed in same tab via custom event
     window.addEventListener("gamepad-mapping-changed", reloadMapping);
 
     function fireInput(stateKey: string, actionName: string, isDown: boolean) {
       const wasDown = pressed.get(stateKey) ?? false;
       if (isDown === wasDown) return;
       pressed.set(stateKey, isDown);
-      const action = GAME_ACTIONS[actionName];
-      if (!action) return;
-      onInputRef.current({ type: isDown ? "keydown" : "keyup", key: action.key, keyCode: action.keyCode, code: action.code });
+
+      onActivityRef.current?.(actionName, isDown);
+
+      const slot = slotRef.current;
+      if (!slot) return; // Spectators don't send inputs to the game
+
+      const keyInfo = getPlayerActionKey(slot, actionName);
+      if (!keyInfo) return;
+
+      onInputRef.current({
+        type: isDown ? "keydown" : "keyup",
+        playerIndex: slot,
+        action: actionName,
+        key: keyInfo.key,
+        keyCode: keyInfo.keyCode,
+        code: keyInfo.code,
+      });
     }
 
     function poll() {
@@ -64,3 +89,4 @@ export function useGamepad(onInput: (event: InputEvent) => void) {
     };
   }, []);
 }
+

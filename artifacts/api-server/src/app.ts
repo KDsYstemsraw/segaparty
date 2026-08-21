@@ -1,6 +1,8 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
+import path from "path";
+import fs from "fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
 
@@ -31,4 +33,25 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
 
+// Serve static frontend in production / single-server mode
+const possibleStaticDirs = [
+  path.resolve(process.cwd(), "artifacts/sega-party/dist/public"),
+  path.resolve(process.cwd(), "dist/public"),
+  path.resolve(process.cwd(), "../sega-party/dist/public"),
+];
+
+const staticDir = possibleStaticDirs.find((dir) => fs.existsSync(dir));
+
+if (staticDir) {
+  app.use(express.static(staticDir));
+  app.use((req, res, next) => {
+    if (req.method === "GET" && !req.path.startsWith("/api") && !req.path.startsWith("/ws")) {
+      res.sendFile(path.resolve(staticDir, "index.html"));
+    } else {
+      next();
+    }
+  });
+}
+
 export default app;
+

@@ -1,179 +1,348 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useLocation } from "wouter";
-import { useGetSession, getGetSessionQueryKey } from "@workspace/api-client-react";
+import { useGetSession, useJoinSession, getGetSessionQueryKey } from "@workspace/api-client-react";
 import { Emulator } from "@/components/emulator";
-import { getRomUrl } from "@/lib/romStore";
-import { getWsUrl, RTC_CONFIG, type InputEvent } from "@/lib/webrtc";
+import { getRomUrl, getRomName, setRom, setRomFromUrl } from "@/lib/romStore";
+import {
+  getWsUrl,
+  RTC_CONFIG,
+  type PlayerInputEvent,
+  type SlotState,
+  type ChatMessage,
+  type ParticipantInfo,
+} from "@/lib/webrtc";
+import { getPlayerActionKey } from "@/lib/gamepadMapping";
 import { useGamepad } from "@/hooks/useGamepad";
+
 import { ControlsModal } from "@/components/ControlsModal";
+import { ControllerSlots } from "@/components/ControllerSlots";
+import { ChatPanel } from "@/components/ChatPanel";
+import { TouchGamepad } from "@/components/TouchGamepad";
+import { InviteModal } from "@/components/InviteModal";
+import { RomFilePicker } from "@/components/RomFilePicker";
+import { cleanRomTitle } from "@/lib/romUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Copy, Users, Wifi, WifiOff, AlertTriangle, HomeIcon, Gamepad2, Settings2, Volume2, VolumeX } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import {
+  Copy,
+  Users,
+  Wifi,
+  WifiOff,
+  AlertTriangle,
+  HomeIcon,
+  Gamepad2,
+  Settings2,
+  Volume2,
+  VolumeX,
+  Maximize2,
+  Tv,
+  Share2,
+  Smartphone,
+  Sparkles,
+  FolderOpen,
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 
+
+const DEFAULT_NICKNAMES = [
+  "Sonic_Speed",
+  "Tails_Flyer",
+  "Knuckles_Brawler",
+  "Shinobi_Ninja",
+  "Streets_Axel",
+  "Golden_Axe",
+  "Gunstar_Hero",
+  "Ecco_Dolphin",
+  "Ristar_Star",
+  "Mega_Player",
+];
+
 export default function SessionPage() {
   const params = useParams();
-  const code = params.code || "";
+  const rawCode = params.code || "";
+  const code = rawCode.toUpperCase();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
-  const myPlayerId = sessionStorage.getItem("playerId") || "";
+  const [myPlayerId, setMyPlayerId] = useState<string>(() => sessionStorage.getItem("playerId") || "");
+  const [myPlayerName, setMyPlayerName] = useState<string>(() => sessionStorage.getItem("playerName") || "");
   const myPeerId = useRef(crypto.randomUUID());
 
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [audioBlocked, setAudioBlocked] = useState(false);
+  const [crtFilter, setCrtFilter] = useState(false);
+  const [showTouchGamepad, setShowTouchGamepad] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
+
+  // Modals state
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [joinPromptOpen, setJoinPromptOpen] = useState(false);
+  const [romPickerOpen, setRomPickerOpen] = useState(false);
+  const [newRomFile, setNewRomFile] = useState<File | null>(null);
+  const [guestNameInput, setGuestNameInput] = useState(() => {
+    return DEFAULT_NICKNAMES[Math.floor(Math.random() * DEFAULT_NICKNAMES.length)];
+  });
+
+  // Room & slots state
+  const [slots, setSlots] = useState<SlotState>({ 1: null, 2: null, 3: null, 4: null });
+  const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeRomName, setActiveRomName] = useState<string | null>(getRomName());
+  const [currentRomUrl, setCurrentRomUrl] = useState<string | null>(() => getRomUrl());
+  const [activeButtons, setActiveButtons] = useState<Set<string>>(new Set());
+
 
   const wsRef = useRef<WebSocket | null>(null);
   const peerConnsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const dataChannelsRef = useRef<Map<string, RTCDataChannel>>(new Map());
   const gameStreamRef = useRef<MediaStream | null>(null);
   const pendingGuestsRef = useRef<Set<string>>(new Set());
-  const dcRef = useRef<RTCDataChannel | null>(null);
+  const guestDataChannelRef = useRef<RTCDataChannel | null>(null);
 
-  const { data: session, isLoading, isError } = useGetSession(code, {
+  const joinSession = useJoinSession();
+
+  const { data: session, isLoading, isError, refetch } = useGetSession(code, {
     query: {
       enabled: !!code,
       queryKey: getGetSessionQueryKey(code),
-      refetchInterval: 3000,
+      refetchInterval: 5000,
     },
   });
 
-  const [controlsOpen, setControlsOpen] = useState(false);
-
-  const romUrl = getRomUrl();
+  const romUrl = currentRomUrl || getRomUrl();
   const isHost = !!session && !!myPlayerId && myPlayerId === session.hostId;
 
-  // Route gamepad inputs: host dispatches to window (EJS picks it up),
-  // guest sends over data channel to host
-  const handleGamepadInput = useCallback((event: InputEvent) => {
-    if (isHost) {
-      window.dispatchEvent(new KeyboardEvent(event.type, {
-        key: event.key, keyCode: event.keyCode, code: event.code, bubbles: true,
-      }));
-    } else {
-      if (dcRef.current?.readyState === "open") {
-        dcRef.current.send(JSON.stringify(event));
-      }
+  // Determine current user's slot number (1, 2, 3, 4 or null)
+  const mySlot: number | null = (() => {
+    for (let i = 1; i <= 4; i++) {
+      if (slots[i]?.peerId === myPeerId.current) return i;
     }
-  }, [isHost]);
+    return null;
+  })();
 
-  useGamepad(handleGamepadInput);
 
-  const sendSignal = useCallback((targetPeerId: string, data: unknown) => {
-    wsRef.current?.send(JSON.stringify({
-      type: "signal",
-      sessionCode: code,
-      targetPeerId,
-      data,
-    }));
-  }, [code]);
-
-  const createHostOffer = useCallback(async (guestPeerId: string, stream: MediaStream | null) => {
-    const pc = new RTCPeerConnection(RTC_CONFIG);
-    peerConnsRef.current.set(guestPeerId, pc);
-
-    const dc = pc.createDataChannel("inputs");
-    dc.onmessage = (e) => {
-      try {
-        const input = JSON.parse(e.data) as InputEvent;
-        window.dispatchEvent(new KeyboardEvent(input.type, {
-          key: input.key,
-          keyCode: input.keyCode,
-          code: input.code,
-          bubbles: true,
-        }));
-      } catch {
-        // ignore malformed input
-      }
-    };
-
-    if (stream) {
-      for (const track of stream.getTracks()) {
-        pc.addTrack(track, stream);
-      }
+  // Prompt nickname modal if guest arrived via link without playerId
+  useEffect(() => {
+    if (!isLoading && session && !myPlayerId) {
+      setJoinPromptOpen(true);
     }
+  }, [isLoading, session, myPlayerId]);
 
-    pc.onicecandidate = (e) => {
-      if (e.candidate) {
-        sendSignal(guestPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
-      }
-    };
+  // Track button activity for live UI monitor
+  const handleButtonActivity = useCallback((action: string, isDown: boolean) => {
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    sendSignal(guestPeerId, { type: "offer", sdp: pc.localDescription });
-  }, [sendSignal]);
+    setActiveButtons((prev) => {
+      const next = new Set(prev);
+      if (isDown) next.add(action);
+      else next.delete(action);
+      return next;
+    });
+  }, []);
 
-  const handleSignal = useCallback(async (fromPeerId: string, data: Record<string, unknown>) => {
-    if (data.type === "offer" && !isHost) {
-      const pc = new RTCPeerConnection(RTC_CONFIG);
-      peerConnsRef.current.set(fromPeerId, pc);
-
-      pc.ontrack = (e) => {
-        if (e.streams[0]) {
-          setRemoteStream(e.streams[0]);
-          setConnectionStatus("connected");
+  // Route Gamepad & Virtual Gamepad Inputs
+  const handleInputEvent = useCallback(
+    (event: PlayerInputEvent) => {
+      if (isHost) {
+        // Host dispatches keyboard event to window
+        window.dispatchEvent(
+          new KeyboardEvent(event.type, {
+            key: event.key,
+            keyCode: event.keyCode,
+            code: event.code,
+            bubbles: true,
+          }),
+        );
+      } else {
+        // Guest sends over WebRTC Data Channel to Host
+        if (guestDataChannelRef.current?.readyState === "open") {
+          guestDataChannelRef.current.send(JSON.stringify(event));
         }
+      }
+    },
+    [isHost],
+  );
+
+  useGamepad(mySlot, handleInputEvent, handleButtonActivity);
+
+  // Send signaling helper
+  const sendSignal = useCallback(
+    (targetPeerId: string, data: unknown) => {
+      wsRef.current?.send(
+        JSON.stringify({
+          type: "signal",
+          sessionCode: code,
+          targetPeerId,
+          data,
+        }),
+      );
+    },
+    [code],
+  );
+
+  // Host creates WebRTC Offer for a connected guest
+  const createHostOffer = useCallback(
+    async (guestPeerId: string, stream: MediaStream | null) => {
+      const pc = new RTCPeerConnection(RTC_CONFIG);
+      peerConnsRef.current.set(guestPeerId, pc);
+
+      // Create low-latency data channel for inputs
+      const dc = pc.createDataChannel("inputs", {
+        ordered: false,
+        maxRetransmits: 0,
+      });
+      dataChannelsRef.current.set(guestPeerId, dc);
+
+      dc.onmessage = (e) => {
+        try {
+          const input = JSON.parse(e.data) as PlayerInputEvent;
+          // Look up mapped key for the player slot and dispatch
+          const keyInfo = getPlayerActionKey(input.playerIndex, input.action);
+          if (keyInfo) {
+            window.dispatchEvent(
+              new KeyboardEvent(input.type, {
+                key: keyInfo.key,
+                keyCode: keyInfo.keyCode,
+                code: keyInfo.code,
+                bubbles: true,
+              }),
+            );
+          }
+        } catch {}
       };
 
-      pc.ondatachannel = (e) => {
-        dcRef.current = e.channel;
-      };
+      if (stream) {
+        for (const track of stream.getTracks()) {
+          pc.addTrack(track, stream);
+        }
+      }
 
       pc.onicecandidate = (e) => {
         if (e.candidate) {
-          sendSignal(fromPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
+          sendSignal(guestPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
         }
       };
 
-      pc.onconnectionstatechange = () => {
-        if (pc.connectionState === "failed") setConnectionStatus("error");
-      };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      sendSignal(guestPeerId, { type: "offer", sdp: pc.localDescription });
+    },
+    [sendSignal],
+  );
 
-      await pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      sendSignal(fromPeerId, { type: "answer", sdp: pc.localDescription });
-      return;
-    }
+  // Handle incoming signaling messages from peers
+  const handleSignal = useCallback(
+    async (fromPeerId: string, data: Record<string, unknown>) => {
+      if (data.type === "offer" && !isHost) {
+        const pc = new RTCPeerConnection(RTC_CONFIG);
+        peerConnsRef.current.set(fromPeerId, pc);
 
-    if (data.type === "answer" && isHost) {
-      const pc = peerConnsRef.current.get(fromPeerId);
-      if (pc) await pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
-      return;
-    }
+        pc.ontrack = (e) => {
+          if (e.streams[0]) {
+            setRemoteStream(e.streams[0]);
+            setConnectionStatus("connected");
+          }
+        };
 
-    if (data.type === "ice-candidate") {
-      const pc = peerConnsRef.current.get(fromPeerId);
-      if (pc && data.candidate) {
-        await pc.addIceCandidate(data.candidate as RTCIceCandidateInit);
+        pc.ondatachannel = (e) => {
+          guestDataChannelRef.current = e.channel;
+        };
+
+        pc.onicecandidate = (e) => {
+          if (e.candidate) {
+            sendSignal(fromPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
+          }
+        };
+
+        pc.onconnectionstatechange = () => {
+          if (pc.connectionState === "failed") setConnectionStatus("error");
+        };
+
+        await pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sendSignal(fromPeerId, { type: "answer", sdp: pc.localDescription });
+        return;
       }
-      return;
-    }
-  }, [isHost, sendSignal]);
 
-  // Connect to signaling server once we know our role
+      if (data.type === "answer" && isHost) {
+        const pc = peerConnsRef.current.get(fromPeerId);
+        if (pc) await pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
+        return;
+      }
+
+      if (data.type === "ice-candidate") {
+        const pc = peerConnsRef.current.get(fromPeerId);
+        if (pc && data.candidate) {
+          await pc.addIceCandidate(data.candidate as RTCIceCandidateInit);
+        }
+        return;
+      }
+    },
+    [isHost, sendSignal],
+  );
+
+  // WebSocket signaling connection
   useEffect(() => {
-    if (!session) return;
+    if (!session || !myPlayerName) return;
 
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
     setConnectionStatus("connecting");
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({
-        type: "join",
-        sessionCode: code,
-        role: isHost ? "host" : "guest",
-        peerId: myPeerId.current,
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "join",
+          sessionCode: code,
+          role: isHost ? "host" : "guest",
+          peerId: myPeerId.current,
+          playerName: myPlayerName,
+          romName: activeRomName || undefined,
+        }),
+      );
     };
 
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string) as Record<string, unknown>;
+
+        if (msg.type === "room-state") {
+          if (msg.slots) setSlots(msg.slots as SlotState);
+          if (msg.peers) setParticipants(msg.peers as ParticipantInfo[]);
+          if (msg.romName) setActiveRomName(msg.romName as string);
+        }
+
+        if (msg.type === "slot-state") {
+          if (msg.slots) setSlots(msg.slots as SlotState);
+        }
+
+        if (msg.type === "participant-joined") {
+          setParticipants((prev) => [
+            ...prev.filter((p) => p.peerId !== msg.peerId),
+            {
+              peerId: msg.peerId as string,
+              playerName: msg.playerName as string,
+              role: msg.role as "host" | "guest",
+            },
+          ]);
+        }
+
+        if (msg.type === "chat") {
+          setMessages((prev) => [...prev, msg as unknown as ChatMessage]);
+        }
+
+        if (msg.type === "rom-info") {
+          setActiveRomName(msg.romName as string);
+        }
 
         if (msg.type === "peer-joined" && isHost) {
           const guestPeerId = msg.peerId as string;
@@ -185,13 +354,13 @@ export default function SessionPage() {
           }
         }
 
-        if (msg.type === "host-info" && !isHost) {
-          // server confirmed host exists — waiting for offer
-        }
-
         if (msg.type === "no-host" && !isHost) {
           setConnectionStatus("error");
-          toast({ title: "No host found", description: "The host hasn't connected yet. Try refreshing.", variant: "destructive" });
+          toast({
+            title: "Host not online",
+            description: "Waiting for the host to launch the game.",
+            variant: "destructive",
+          });
         }
 
         if (msg.type === "signal") {
@@ -201,16 +370,20 @@ export default function SessionPage() {
         if (msg.type === "peer-left") {
           const peerId = msg.peerId as string;
           const pc = peerConnsRef.current.get(peerId);
-          if (pc) { pc.close(); peerConnsRef.current.delete(peerId); }
+          if (pc) {
+            pc.close();
+            peerConnsRef.current.delete(peerId);
+          }
+          dataChannelsRef.current.delete(peerId);
           pendingGuestsRef.current.delete(peerId);
-          if (!isHost) {
+          setParticipants((prev) => prev.filter((p) => p.peerId !== peerId));
+
+          if (!isHost && peerId === session.hostId) {
             setRemoteStream(null);
             setConnectionStatus("idle");
           }
         }
-      } catch {
-        // ignore parse errors
-      }
+      } catch {}
     };
 
     ws.onerror = () => setConnectionStatus("error");
@@ -220,219 +393,633 @@ export default function SessionPage() {
       ws.close();
       peerConnsRef.current.forEach((pc) => pc.close());
       peerConnsRef.current.clear();
+      dataChannelsRef.current.clear();
     };
-  }, [session?.code, isHost]);
+  }, [code, isHost, myPlayerName, session?.code]);
 
-  // When host's game stream is ready, send offers to pending guests
-  const handleStreamReady = useCallback((stream: MediaStream) => {
-    gameStreamRef.current = stream;
-    for (const guestPeerId of pendingGuestsRef.current) {
-      createHostOffer(guestPeerId, stream);
+  // When Host's emulator stream is ready, create offers for waiting guests
+  const handleStreamReady = useCallback(
+    (stream: MediaStream) => {
+      gameStreamRef.current = stream;
+      for (const guestPeerId of pendingGuestsRef.current) {
+        createHostOffer(guestPeerId, stream);
+      }
+      pendingGuestsRef.current.clear();
+    },
+    [createHostOffer],
+  );
+
+  // Late audio track addition from emulator
+  const handleAudioTrackAdded = useCallback((track: MediaStreamTrack) => {
+    if (!gameStreamRef.current) return;
+    if (!gameStreamRef.current.getAudioTracks().includes(track)) {
+      gameStreamRef.current.addTrack(track);
+      // Add track to existing peer connections
+      peerConnsRef.current.forEach(async (pc, peerId) => {
+        try {
+          pc.addTrack(track, gameStreamRef.current!);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          sendSignal(peerId, { type: "offer", sdp: pc.localDescription });
+        } catch {}
+      });
     }
-    pendingGuestsRef.current.clear();
-  }, [createHostOffer]);
+  }, [sendSignal]);
 
-  // Keyboard input forwarding for guests
+  // Claim Controller Slot
+  const handleClaimSlot = useCallback(
+    (slotNumber: number) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "slot-claim",
+            sessionCode: code,
+            slot: slotNumber,
+          }),
+        );
+      }
+    },
+    [code],
+  );
+
+  // Release Controller Slot
+  const handleReleaseSlot = useCallback(
+    (slotNumber?: number) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "slot-release",
+            sessionCode: code,
+            slot: slotNumber,
+          }),
+        );
+      }
+    },
+    [code],
+  );
+
+  // Send Text Chat Message
+  const handleSendMessage = useCallback(
+    (text: string) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "chat",
+            sessionCode: code,
+            text,
+          }),
+        );
+      }
+    },
+    [code],
+  );
+
+  // Keyboard input forwarding for assigned player slots
   useEffect(() => {
-    if (isHost) return;
+    if (!mySlot) return; // Spectators don't forward keyboard to game
 
-    const KEYS: Record<string, { key: string; keyCode: number; code: string }> = {
-      ArrowUp:    { key: "ArrowUp",    keyCode: 38, code: "ArrowUp" },
-      ArrowDown:  { key: "ArrowDown",  keyCode: 40, code: "ArrowDown" },
-      ArrowLeft:  { key: "ArrowLeft",  keyCode: 37, code: "ArrowLeft" },
-      ArrowRight: { key: "ArrowRight", keyCode: 39, code: "ArrowRight" },
-      z: { key: "z", keyCode: 90, code: "KeyZ" },
-      x: { key: "x", keyCode: 88, code: "KeyX" },
-      a: { key: "a", keyCode: 65, code: "KeyA" },
-      s: { key: "s", keyCode: 83, code: "KeyS" },
-      Enter: { key: "Enter", keyCode: 13, code: "Enter" },
-      " ":  { key: " ", keyCode: 32, code: "Space" },
+    const KEY_ACTIONS_P1: Record<string, string> = {
+      ArrowUp: "up",
+      ArrowDown: "down",
+      ArrowLeft: "left",
+      ArrowRight: "right",
+      z: "a",
+      Z: "a",
+      x: "b",
+      X: "b",
+      c: "c",
+      C: "c",
+      a: "x",
+      A: "x",
+      s: "y",
+      S: "y",
+      d: "z",
+      D: "z",
+      Enter: "start",
+      " ": "mode",
     };
 
-    const forward = (e: KeyboardEvent, type: "keydown" | "keyup") => {
-      const info = KEYS[e.key];
-      if (!info) return;
+    const KEY_ACTIONS_P2: Record<string, string> = {
+      i: "up",
+      I: "up",
+      k: "down",
+      K: "down",
+      j: "left",
+      J: "left",
+      l: "right",
+      L: "right",
+      u: "a",
+      U: "a",
+      o: "b",
+      O: "b",
+      p: "c",
+      P: "c",
+      "7": "x",
+      "8": "y",
+      "9": "z",
+      "0": "start",
+      "-": "mode",
+    };
+
+    const actionMap = mySlot === 2 ? KEY_ACTIONS_P2 : KEY_ACTIONS_P1;
+
+    const forwardKey = (e: KeyboardEvent, type: "keydown" | "keyup") => {
+      // Don't intercept if user is typing in chat input
+      if (
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA"
+      ) {
+        return;
+      }
+
+      const action = actionMap[e.key];
+      if (!action) return;
+
       e.preventDefault();
-      if (!dcRef.current || dcRef.current.readyState !== "open") return;
-      const msg: InputEvent = { type, ...info };
-      dcRef.current.send(JSON.stringify(msg));
+      handleButtonActivity(action, type === "keydown");
+
+      const keyInfo = getPlayerActionKey(mySlot, action);
+      if (!keyInfo) return;
+
+      handleInputEvent({
+        type,
+        playerIndex: mySlot,
+        action,
+        key: keyInfo.key,
+        keyCode: keyInfo.keyCode,
+        code: keyInfo.code,
+      });
     };
 
-    const onDown = (e: KeyboardEvent) => forward(e, "keydown");
-    const onUp   = (e: KeyboardEvent) => forward(e, "keyup");
-    window.addEventListener("keydown", onDown);
-    window.addEventListener("keyup", onUp);
+    const onKeyDown = (e: KeyboardEvent) => forwardKey(e, "keydown");
+    const onKeyUp = (e: KeyboardEvent) => forwardKey(e, "keyup");
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
     return () => {
-      window.removeEventListener("keydown", onDown);
-      window.removeEventListener("keyup", onUp);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
     };
-  }, [isHost]);
+  }, [mySlot, handleInputEvent, handleButtonActivity]);
 
-  // Wire remote stream to video element
+  // Wire video stream and handle audio autoplay
   useEffect(() => {
     if (videoRef.current && remoteStream) {
       videoRef.current.srcObject = remoteStream;
-      videoRef.current.play().catch(() => {});
-    }
-  }, [remoteStream]);
+      videoRef.current.volume = volume;
+      videoRef.current.muted = isMuted;
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(window.location.href).then(() => {
-      toast({ title: "Link copied!", description: "Share with friends to play together." });
+      videoRef.current
+        .play()
+        .then(() => setAudioBlocked(false))
+        .catch((err) => {
+          if (err.name === "NotAllowedError") {
+            setAudioBlocked(true);
+          }
+        });
+    }
+  }, [remoteStream, volume, isMuted]);
+
+  const handleLoadRomFile = async (file: File) => {
+    const url = await setRom(file);
+    const title = cleanRomTitle(file.name);
+    setCurrentRomUrl(url);
+    setActiveRomName(title);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "rom-info",
+          sessionCode: code,
+          romName: title,
+        }),
+      );
+      wsRef.current.send(
+        JSON.stringify({
+          type: "chat",
+          sessionCode: code,
+          text: `🎮 Host loaded ROM: ${title}`,
+        }),
+      );
+    }
+    toast({
+      title: "ROM Loaded",
+      description: `Loaded ${title}`,
     });
+    setRomPickerOpen(false);
+    setNewRomFile(null);
+  };
+
+  const handleQuickJoinSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!guestNameInput.trim()) return;
+
+    const name = guestNameInput.trim();
+
+    joinSession.mutate(
+      { code, data: { playerName: name } },
+      {
+        onSuccess: (resp) => {
+          sessionStorage.setItem("playerId", resp.playerId);
+          sessionStorage.setItem("playerName", name);
+          setMyPlayerId(resp.playerId);
+          setMyPlayerName(name);
+          setJoinPromptOpen(false);
+          refetch();
+        },
+        onError: () => {
+          toast({
+            title: "Join Error",
+            description: "Could not join session. It may be full or ended.",
+            variant: "destructive",
+          });
+        },
+      },
+    );
+  };
+
+  const unlockAudio = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = false;
+      setIsMuted(false);
+      videoRef.current
+        .play()
+        .then(() => setAudioBlocked(false))
+        .catch(() => {});
+    }
+  };
+
+  const toggleFullscreen = () => {
+    if (!videoContainerRef.current) return;
+    if (!document.fullscreenElement) {
+      videoContainerRef.current.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
   };
 
   if (isLoading) {
     return (
-      <div className="min-h-[100dvh] flex flex-col items-center p-6 space-y-6">
-        <Skeleton className="w-full max-w-3xl aspect-video bg-muted" />
-        <Skeleton className="w-full max-w-3xl h-32 bg-muted" />
+      <div className="min-h-[100dvh] flex flex-col items-center p-6 space-y-6 bg-background">
+        <Skeleton className="w-full max-w-5xl aspect-video bg-muted" />
+        <Skeleton className="w-full max-w-5xl h-32 bg-muted" />
       </div>
     );
   }
 
   if (isError || !session) {
     return (
-      <div className="min-h-[100dvh] flex flex-col items-center justify-center p-6">
-        <AlertTriangle className="w-16 h-16 text-destructive mb-4" />
-        <h2 className="text-2xl font-display text-destructive mb-2">Session Not Found</h2>
-        <p className="text-muted-foreground font-sans mb-6">This session doesn't exist or has ended.</p>
-        <Button onClick={() => setLocation("/")} variant="outline" className="font-sans border-primary text-primary">
-          <HomeIcon className="w-4 h-4 mr-2" /> Return Home
+      <div className="min-h-[100dvh] flex flex-col items-center justify-center p-6 bg-background text-center">
+        <AlertTriangle className="w-16 h-16 text-destructive mb-4 animate-bounce" />
+        <h2 className="text-3xl font-display text-destructive mb-2">Room Not Found</h2>
+        <p className="text-muted-foreground font-sans mb-6">
+          The party room for code <span className="font-mono font-bold text-foreground">{code}</span> does not exist or has closed.
+        </p>
+        <Button onClick={() => setLocation("/")} className="bg-primary text-primary-foreground font-bold">
+          <HomeIcon className="w-4 h-4 mr-2" /> Return to Lobby
         </Button>
       </div>
     );
   }
 
   return (
-    <div className="min-h-[100dvh] flex flex-col items-center p-4 md:p-8 bg-background">
-
-      {/* Header bar */}
-      <div className="w-full max-w-4xl flex items-center justify-between mb-6">
+    <div className="min-h-[100dvh] flex flex-col bg-background text-foreground">
+      {/* Top Navbar */}
+      <header className="w-full border-b border-border/80 bg-card/60 backdrop-blur sticky top-0 z-30 px-4 py-2.5 flex items-center justify-between">
+        {/* Left: Brand & Room Code */}
         <div className="flex items-center gap-3">
-          <div className="bg-primary/20 text-primary px-3 py-1 border border-primary font-display font-bold text-xl tracking-widest">
-            {session.code}
+          <button
+            onClick={() => setLocation("/")}
+            className="font-display font-black text-xl text-primary hover:text-accent transition-colors flex items-center gap-1.5"
+          >
+            <Gamepad2 className="w-5 h-5 text-accent" /> SEGA PARTY
+          </button>
+
+          <span className="hidden md:inline-block text-[9px] uppercase font-bold text-muted-foreground font-mono px-1.5 py-0.5 rounded bg-muted/40 border border-border tracking-wider">
+            KD SYSTEMS
+          </span>
+
+
+          <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 bg-primary/10 border border-primary/40 rounded-md">
+            <span className="text-[10px] uppercase font-bold text-muted-foreground font-sans tracking-widest">
+              Room
+            </span>
+            <span className="font-display font-black text-sm tracking-widest text-primary">
+              {session.code}
+            </span>
           </div>
-          <Button variant="ghost" size="icon" onClick={copyLink}
-            className="text-muted-foreground hover:text-primary border border-transparent hover:border-primary/50"
-            data-testid="button-copy-link">
-            <Copy className="w-4 h-4" />
+
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setInviteOpen(true)}
+            className="h-7 text-xs border-primary/50 text-primary hover:bg-primary hover:text-primary-foreground font-bold gap-1"
+          >
+            <Share2 className="w-3 h-3" /> Invite
           </Button>
         </div>
-        <div className="flex items-center gap-3">
-          {!isHost && (
-            <div className="flex items-center gap-2 text-sm font-sans font-bold uppercase">
-              {connectionStatus === "connected" ? (
-                <><Wifi className="w-4 h-4 text-green-400" /><span className="text-green-400">Connected</span></>
-              ) : connectionStatus === "error" ? (
-                <><WifiOff className="w-4 h-4 text-destructive" /><span className="text-destructive">No Signal</span></>
-              ) : (
-                <><Wifi className="w-4 h-4 text-muted-foreground animate-pulse" /><span className="text-muted-foreground">Connecting...</span></>
-              )}
-            </div>
-          )}
-          <Button variant="outline" size="sm" onClick={() => setControlsOpen(true)}
-            className="border-border text-muted-foreground hover:text-foreground hover:border-primary/50 gap-1.5 font-sans text-xs uppercase tracking-wide"
-            data-testid="button-open-controls">
-            <Settings2 className="w-3.5 h-3.5" /> Controls
-          </Button>
-          <div className="flex items-center gap-2 text-muted-foreground font-sans text-sm font-bold uppercase">
-            <Users className="w-4 h-4" />
-            {session.players.length} / {session.maxPlayers}
-          </div>
-        </div>
-      </div>
 
-      {/* Game area */}
-      {isHost ? (
-        romUrl ? (
-          <Emulator romUrl={romUrl} onStreamReady={handleStreamReady} />
-        ) : (
-          <div className="w-full max-w-3xl aspect-video bg-black border-4 border-destructive/50 flex items-center justify-center">
-            <p className="text-destructive font-display">No ROM loaded. <button onClick={() => setLocation("/")} className="underline">Go back</button></p>
-          </div>
-        )
-      ) : (
-        // Guest view
-        remoteStream ? (
-          <div className="w-full max-w-3xl mx-auto aspect-video bg-black border-4 border-primary shadow-[0_0_20px_rgba(0,71,187,0.4)] relative overflow-hidden group">
-            <video
-              ref={videoRef}
-              className="w-full h-full object-contain"
-              autoPlay
-              playsInline
-              muted={isMuted}
-            />
-            {/* Mute/unmute toggle — visible on hover */}
-            <button
-              onClick={() => setIsMuted((m) => !m)}
-              className="absolute bottom-2 right-2 bg-black/60 hover:bg-black/80 text-white rounded p-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
-              title={isMuted ? "Unmute" : "Mute"}
+        {/* Right: Load ROM / Touch / Config Controls */}
+        <div className="flex items-center gap-2">
+
+
+          {/* Load ROM button for host */}
+          {isHost && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setRomPickerOpen(true)}
+              className="h-7 px-2 text-xs font-sans border-primary/50 text-primary hover:bg-primary hover:text-primary-foreground gap-1.5 font-bold"
+              title="Load or Switch Sega Genesis ROM"
             >
-              {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            </button>
-          </div>
-        ) : (
-          <div className="w-full max-w-3xl aspect-video bg-black border-4 border-primary/30 flex flex-col items-center justify-center gap-4 text-center px-8">
-            <Gamepad2 className="w-14 h-14 text-primary animate-pulse" />
-            <div>
-              <h2 className="font-display text-xl text-foreground mb-2">
-                {connectionStatus === "error" ? "CONNECTION FAILED" : "WAITING FOR HOST"}
-              </h2>
-              <p className="font-sans text-sm text-muted-foreground">
-                {connectionStatus === "error"
-                  ? "Could not connect to the host. Make sure the host has started the game."
-                  : "The host's game will appear here once they start playing."}
-              </p>
-            </div>
-            {connectionStatus === "error" && (
-              <Button variant="outline" onClick={() => window.location.reload()} className="border-primary text-primary font-sans mt-2">
-                Retry Connection
-              </Button>
+              <FolderOpen className="w-3.5 h-3.5 text-accent" /> Load ROM
+            </Button>
+          )}
+
+          {/* Touch Gamepad toggle */}
+          <Button
+            size="sm"
+            variant={showTouchGamepad ? "default" : "outline"}
+            onClick={() => setShowTouchGamepad(!showTouchGamepad)}
+            className="h-7 px-2 text-xs font-sans gap-1"
+            title="Toggle On-Screen Mobile Touch Controller"
+          >
+            <Smartphone className="w-3.5 h-3.5" /> Touch Pad
+          </Button>
+
+          {/* Controls Setup */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setControlsOpen(true)}
+            className="h-7 px-2 text-xs font-sans border-border text-muted-foreground hover:text-foreground gap-1"
+          >
+            <Settings2 className="w-3.5 h-3.5" /> Config
+          </Button>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="flex-1 w-full max-w-7xl mx-auto p-3 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left / Center Column: Stage & Controller Slots (8 cols) */}
+        <div className="lg:col-span-8 flex flex-col space-y-4">
+          {/* Game Stage */}
+          <div className="w-full relative">
+            {isHost ? (
+              romUrl ? (
+                <Emulator
+                  key={romUrl}
+                  romUrl={romUrl}
+                  onStreamReady={handleStreamReady}
+                  onAudioTrackAdded={handleAudioTrackAdded}
+                />
+              ) : (
+                <div className="w-full aspect-video bg-black border-4 border-destructive/50 rounded-lg flex flex-col items-center justify-center p-6 text-center space-y-3">
+                  <p className="text-destructive font-display text-lg">No ROM loaded in memory.</p>
+                  <Button onClick={() => setRomPickerOpen(true)} className="bg-primary text-primary-foreground font-bold">
+                    Pick ROM File from PC
+                  </Button>
+                </div>
+              )
+            ) : (
+              // Guest Stream View
+              <div
+                ref={videoContainerRef}
+                className="w-full aspect-[4/3] max-w-4xl mx-auto bg-black border-4 border-primary rounded-lg shadow-[0_0_30px_rgba(0,71,187,0.4)] relative overflow-hidden group flex items-center justify-center"
+              >
+                {remoteStream ? (
+                  <>
+                    <video
+                      ref={videoRef}
+                      className="w-full h-full object-contain"
+                      autoPlay
+                      playsInline
+                    />
+
+                    {/* CRT Scanline Filter */}
+                    {crtFilter && (
+                      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.4)_50%)] bg-[length:100%_4px] z-10 opacity-70" />
+                    )}
+
+                    {/* Autoplay Unmute Recovery Banner */}
+                    {audioBlocked && (
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-accent/90 text-accent-foreground px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 animate-bounce cursor-pointer">
+                        <VolumeX className="w-4 h-4" />
+                        <button onClick={unlockAudio} className="text-xs font-bold font-sans uppercase">
+                          Click to Enable Audio
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Guest Stream Controls Overlay */}
+                    <div className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/80 p-1.5 rounded-lg border border-primary/30 opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => setIsMuted(!isMuted)}
+                        className="w-7 h-7 text-muted-foreground hover:text-foreground"
+                        title={isMuted ? "Unmute Game Audio" : "Mute Game Audio"}
+                      >
+                        {isMuted ? <VolumeX className="w-4 h-4 text-destructive" /> : <Volume2 className="w-4 h-4 text-green-400" />}
+                      </Button>
+
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={volume}
+                        onChange={(e) => setVolume(parseFloat(e.target.value))}
+                        className="w-16 h-1 accent-primary cursor-pointer"
+                        title={`Volume: ${Math.round(volume * 100)}%`}
+                      />
+
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => setCrtFilter(!crtFilter)}
+                        className={`w-7 h-7 ${crtFilter ? "text-accent" : "text-muted-foreground hover:text-foreground"}`}
+                        title="Toggle CRT Scanline Effect"
+                      >
+                        <Tv className="w-3.5 h-3.5" />
+                      </Button>
+
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={toggleFullscreen}
+                        className="w-7 h-7 text-muted-foreground hover:text-foreground"
+                        title="Fullscreen"
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center p-8 text-center space-y-4">
+                    <Gamepad2 className="w-16 h-16 text-primary animate-pulse" />
+                    <div>
+                      <h2 className="font-display text-xl text-foreground mb-1">
+                        {connectionStatus === "error" ? "NO HOST SIGNAL" : "CONNECTING TO GAME STREAM"}
+                      </h2>
+                      <p className="font-sans text-xs text-muted-foreground max-w-sm">
+                        {connectionStatus === "error"
+                          ? "Could not establish WebRTC stream. The host may still be loading the game."
+                          : "Waiting for host's Genesis emulator video & audio feed to start..."}
+                      </p>
+                    </div>
+                    {connectionStatus === "error" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => window.location.reload()}
+                        className="border-primary text-primary font-sans text-xs"
+                      >
+                        Retry Connection
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </div>
-        )
-      )}
 
-      {/* Controls hint for guests */}
-      {!isHost && remoteStream && (
-        <div className="w-full max-w-4xl mt-4 px-2">
-          <p className="text-xs text-muted-foreground font-sans text-center uppercase tracking-widest">
-            Arrow keys to move &nbsp;·&nbsp; Z / X / A / S — buttons &nbsp;·&nbsp; Enter — start &nbsp;·&nbsp; Space — select
-          </p>
+          {/* Active ROM Info & Stream status */}
+          <div className="flex items-center justify-between px-2 text-xs font-sans text-muted-foreground">
+            <div className="flex items-center gap-2 truncate">
+              <span className="font-bold text-foreground uppercase">Now Playing:</span>
+              <span className="text-primary font-mono truncate">{activeRomName || "Sega Genesis Game"}</span>
+            </div>
+
+            <div className="flex items-center gap-2 text-[11px] uppercase font-bold">
+              {isHost ? (
+                <span className="text-primary flex items-center gap-1">
+                  <Sparkles className="w-3.5 h-3.5 text-accent" /> Hosting Room
+                </span>
+              ) : connectionStatus === "connected" ? (
+                <span className="text-green-400 flex items-center gap-1">
+                  <Wifi className="w-3.5 h-3.5" /> 60 FPS Stereo
+                </span>
+              ) : (
+                <span className="text-muted-foreground flex items-center gap-1 animate-pulse">
+                  <WifiOff className="w-3.5 h-3.5" /> Connecting...
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Multi-Player Controller Slots Bar */}
+          <ControllerSlots
+            slots={slots}
+            myPeerId={myPeerId.current}
+            isHost={isHost}
+            mySlot={mySlot}
+            activeButtons={activeButtons}
+            onClaimSlot={handleClaimSlot}
+            onReleaseSlot={handleReleaseSlot}
+          />
+
+          {/* Mobile Touch Controller (if toggled) */}
+          {showTouchGamepad && (
+            <div className="mt-2">
+              <TouchGamepad
+                playerSlot={mySlot}
+                onInput={handleInputEvent}
+                onActivity={handleButtonActivity}
+              />
+            </div>
+          )}
         </div>
-      )}
 
-      {/* Players */}
-      <div className="w-full max-w-4xl mt-8">
-        <h3 className="font-display text-lg text-primary mb-4 flex items-center gap-2">
-          <Users className="w-5 h-5" /> Connected Players
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-          {session.players.map((player) => (
-            <Card key={player.id} className={`border-border bg-card ${player.isHost ? "border-primary shadow-[0_0_10px_rgba(0,71,187,0.2)]" : ""}`}>
-              <CardContent className="p-4 flex items-center gap-3">
-                <div className={`w-10 h-10 flex items-center justify-center font-display font-bold text-lg bg-background border ${player.isHost ? "border-primary text-primary" : "border-muted text-muted-foreground"}`}>
-                  P{player.playerIndex}
-                </div>
-                <div className="overflow-hidden">
-                  <div className="font-sans font-bold truncate text-foreground">{player.name}</div>
-                  {player.isHost && <div className="text-[10px] uppercase font-bold text-primary tracking-wider">Host</div>}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-          {Array.from({ length: Math.max(0, session.maxPlayers - session.players.length) }).map((_, i) => (
-            <Card key={`empty-${i}`} className="border-dashed border-border bg-transparent opacity-40">
-              <CardContent className="p-4 flex items-center justify-center h-[74px]">
-                <div className="font-sans text-sm font-bold text-muted-foreground uppercase tracking-widest">Waiting...</div>
-              </CardContent>
-            </Card>
-          ))}
+        {/* Right Column: In-Room Hangout Chat (4 cols) */}
+        <div className="lg:col-span-4 h-full min-h-[400px]">
+          <ChatPanel
+            messages={messages}
+            participants={participants}
+            slots={slots}
+            myPeerId={myPeerId.current}
+            onSendMessage={handleSendMessage}
+          />
         </div>
-      </div>
+      </main>
 
+      {/* Controls & Gamepad Rebind Modal */}
       <ControlsModal open={controlsOpen} onClose={() => setControlsOpen(false)} />
+
+      {/* Invite Friends & QR Code Modal */}
+      <InviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} sessionCode={session.code} />
+
+      {/* Host ROM Picker Dialog */}
+      <Dialog open={romPickerOpen} onOpenChange={setRomPickerOpen}>
+        <DialogContent className="max-w-lg bg-card border-primary/60 font-sans shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-2xl text-primary flex items-center gap-2">
+              <FolderOpen className="w-6 h-6 text-accent" /> Load Sega Genesis ROM
+            </DialogTitle>
+            <DialogDescription className="font-sans text-xs text-muted-foreground">
+              Select any Sega Genesis ROM (.bin, .md, .gen, .smd, .zip) from your computer to run and stream live to all guests.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="my-3">
+            <RomFilePicker
+              selectedFile={newRomFile}
+              onFileSelected={(file) => {
+                setNewRomFile(file);
+                if (file) {
+                  handleLoadRomFile(file);
+                }
+              }}
+            />
+          </div>
+
+          <div className="flex justify-end pt-2 border-t border-border">
+            <Button variant="ghost" size="sm" onClick={() => setRomPickerOpen(false)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+
+      {/* Quick Join Dialog (when visiting via URL directly) */}
+      <Dialog open={joinPromptOpen} onOpenChange={setJoinPromptOpen}>
+        <DialogContent className="max-w-md bg-card border-primary/60 font-sans shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-2xl text-primary flex items-center gap-2">
+              <Gamepad2 className="w-6 h-6 text-accent" /> Join Sega Party Room
+            </DialogTitle>
+            <DialogDescription className="font-sans text-xs text-muted-foreground">
+              You were invited to room <span className="font-bold text-foreground font-mono">{code}</span>. Enter your nickname to jump in!
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleQuickJoinSubmit} className="space-y-4 my-2">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                Your Nickname
+              </label>
+              <Input
+                value={guestNameInput}
+                onChange={(e) => setGuestNameInput(e.target.value)}
+                placeholder="PLAYER NAME"
+                maxLength={20}
+                className="bg-muted/40 border-primary/40 focus-visible:ring-primary font-bold text-base h-11"
+                autoFocus
+              />
+            </div>
+
+            <Button
+              type="submit"
+              disabled={joinSession.isPending || !guestNameInput.trim()}
+              className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground font-bold uppercase tracking-wider text-sm shadow-[0_0_15px_rgba(0,71,187,0.4)]"
+            >
+              {joinSession.isPending ? "Joining..." : "Enter Room"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
+
+

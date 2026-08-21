@@ -2,12 +2,28 @@ let romBlobUrl: string | null = null;
 let romFileName: string | null = null;
 
 export function setRom(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
+    if (romBlobUrl) URL.revokeObjectURL(romBlobUrl);
     const url = URL.createObjectURL(file);
     romBlobUrl = url;
     romFileName = file.name;
     resolve(url);
   });
+}
+
+export function setRomFromUrl(url: string, name: string): void {
+  if (romBlobUrl) URL.revokeObjectURL(romBlobUrl);
+  romBlobUrl = url;
+  romFileName = name;
+}
+
+export function setRomFromBuffer(buffer: ArrayBuffer, name: string): string {
+  if (romBlobUrl) URL.revokeObjectURL(romBlobUrl);
+  const blob = new Blob([buffer], { type: "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  romBlobUrl = url;
+  romFileName = name;
+  return url;
 }
 
 export function getRomUrl(): string | null {
@@ -25,3 +41,4 @@ export function clearRom() {
   }
   romFileName = null;
 }
+

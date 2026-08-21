@@ -1,8 +1,0 @@
-uploads = []
-generated = []
-
-[[outputs]]
-id = "lIYXYjOWfvNrWnUo56gmN"
-uri = "file://sega-party.tar.gz"
-type = "unspecified"
-title = "sega-party.tar.gz"

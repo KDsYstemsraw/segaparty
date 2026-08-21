@@ -3,26 +3,17 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { attachSignalingServer } from "./lib/signaling";
 
-const rawPort = process.env["PORT"];
+const rawPort = process.env["PORT"] || "3000";
+const port = Number(rawPort) || 3000;
 
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
-}
-
-const port = Number(rawPort);
-
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-}
 
 const server = http.createServer(app);
 attachSignalingServer(server);
 
-server.listen(port, () => {
-  logger.info({ port }, "Server listening");
+server.listen(port, "0.0.0.0", () => {
+  logger.info({ port, host: "0.0.0.0" }, "Server listening");
 });
+
 
 server.on("error", (err) => {
   logger.error({ err }, "Error starting server");
