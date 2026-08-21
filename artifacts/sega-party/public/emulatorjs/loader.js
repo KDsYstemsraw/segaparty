@@ -1,4 +1,5 @@
 (async function() {
+    if (window.EmulatorJS) { return; }
     const scripts = [
         "emulator.js",
         "nipplejs.js",
@@ -28,8 +29,9 @@
             }();
             script.onload = resolve;
             script.onerror = () => {
-                filesmissing(file).then(e => resolve());
-            }
+                console.error("Failed to load emulator script:", file);
+                resolve();
+            };
             document.head.appendChild(script);
         })
     }
@@ -47,8 +49,9 @@
             }();
             css.onload = resolve;
             css.onerror = () => {
-                filesmissing(file).then(e => resolve());
-            }
+                console.error("Failed to load emulator style:", file);
+                resolve();
+            };
             document.head.appendChild(css);
         });
     }
@@ -131,7 +134,7 @@
         }
     }
 
-    window.EJS_emulator = new EmulatorJS(EJS_player, config);
+    window.EJS_emulator = new EmulatorJS(window.EJS_player || "#game", config);
     window.EJS_adBlocked = (url, del) => window.EJS_emulator.adBlocked(url, del);
     if (typeof window.EJS_ready === "function") {
         window.EJS_emulator.on("ready", window.EJS_ready);

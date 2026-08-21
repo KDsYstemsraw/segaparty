@@ -9,21 +9,21 @@ export const RTC_CONFIG: RTCConfiguration = {
     { urls: "stun:openrelay.metered.ca:80" },
     {
       urls: "turn:openrelay.metered.ca:80",
-      username: "openrelay",
-      credential: "openrelay",
+      username: "openrelayproject",
+      credential: "openrelayproject",
     },
     {
       urls: "turn:openrelay.metered.ca:443",
-      username: "openrelay",
-      credential: "openrelay",
+      username: "openrelayproject",
+      credential: "openrelayproject",
     },
     {
       urls: "turn:openrelay.metered.ca:443?transport=tcp",
-      username: "openrelay",
-      credential: "openrelay",
+      username: "openrelayproject",
+      credential: "openrelayproject",
     },
   ],
-  iceCandidatePoolSize: 10,
+  iceCandidatePoolSize: 2,
 };
 
 

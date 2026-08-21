@@ -64,6 +64,11 @@ export function attachSignalingServer(server: Server) {
     let mySessionCode: string | null = null;
     let myPlayerName = "Anonymous";
 
+    (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    ws.on("pong", () => {
+      (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
+    });
+
     ws.on("message", (rawData) => {
       let msg: Record<string, unknown>;
       try {
@@ -412,6 +417,7 @@ export function attachSignalingServer(server: Server) {
 
       if (room.hostPeerId === myPeerId) {
         room.hostPeerId = null;
+        broadcastToRoom(room, { type: "no-host" });
       }
 
       broadcastToRoom(room, {
@@ -452,6 +458,17 @@ export function attachSignalingServer(server: Server) {
       logger.error({ err }, "WebSocket error");
     });
   });
+
+  // Ping/pong heartbeat to keep connections alive through reverse proxies
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((ws: WebSocket & { isAlive?: boolean }) => {
+      if (ws.isAlive === false) return ws.terminate();
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
+
+  wss.on("close", () => clearInterval(heartbeatInterval));
 
   logger.info("WebSocket signaling server attached at /ws with multi-player slots & chat support");
 }

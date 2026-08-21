@@ -31,6 +31,13 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Required for SharedArrayBuffer (EmulatorJS threaded Wasm cores)
+app.use((_req, res, next) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+  next();
+});
+
 app.use("/api", router);
 
 // Serve static frontend in production / single-server mode
@@ -45,7 +52,12 @@ const staticDir = possibleStaticDirs.find((dir) => fs.existsSync(dir));
 if (staticDir) {
   app.use(express.static(staticDir));
   app.use((req, res, next) => {
-    if (req.method === "GET" && !req.path.startsWith("/api") && !req.path.startsWith("/ws")) {
+    if (
+      req.method === "GET" &&
+      !req.path.startsWith("/api") &&
+      !req.path.startsWith("/ws") &&
+      !req.path.includes(".")
+    ) {
       res.sendFile(path.resolve(staticDir, "index.html"));
     } else {
       next();

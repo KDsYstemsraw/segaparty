@@ -108,6 +108,8 @@ export default function SessionPage() {
   const pendingGuestsRef = useRef<Set<string>>(new Set());
   const guestDataChannelRef = useRef<RTCDataChannel | null>(null);
   const iceCandidateQueueRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  const participantsRef = useRef<ParticipantInfo[]>([]);
+  const hostPeerIdRef = useRef<string | null>(null);
 
 
   const joinSession = useJoinSession();
@@ -194,6 +196,12 @@ export default function SessionPage() {
   const createHostOffer = useCallback(
     async (guestPeerId: string, stream: MediaStream | null) => {
       try {
+        // Close any existing connection to prevent leaks
+        const existingPc = peerConnsRef.current.get(guestPeerId);
+        if (existingPc) {
+          existingPc.close();
+        }
+
         const pc = new RTCPeerConnection(RTC_CONFIG);
         peerConnsRef.current.set(guestPeerId, pc);
 
@@ -262,63 +270,73 @@ export default function SessionPage() {
     async (fromPeerId: string, data: Record<string, unknown>) => {
       try {
         if (data.type === "offer" && !isHost) {
-          const pc = new RTCPeerConnection(RTC_CONFIG);
-          peerConnsRef.current.set(fromPeerId, pc);
+          // Reuse existing PeerConnection for renegotiation (e.g. audio track added)
+          let pc = peerConnsRef.current.get(fromPeerId);
+          const isRenegotiation = !!pc;
 
-          pc.ontrack = (e) => {
-            if (e.streams && e.streams[0]) {
-              setRemoteStream(e.streams[0]);
-              setConnectionStatus("connected");
-            } else if (e.track) {
-              setRemoteStream((prev) => {
-                const s = prev || new MediaStream();
-                if (!s.getTracks().includes(e.track)) {
-                  s.addTrack(e.track);
-                }
-                return s;
-              });
-              setConnectionStatus("connected");
-            }
-          };
+          if (!pc) {
+            pc = new RTCPeerConnection(RTC_CONFIG);
+            peerConnsRef.current.set(fromPeerId, pc);
 
-          pc.ondatachannel = (e) => {
-            guestDataChannelRef.current = e.channel;
-          };
+            pc.ontrack = (e) => {
+              if (e.streams && e.streams[0]) {
+                setRemoteStream(e.streams[0]);
+                setConnectionStatus("connected");
+              } else if (e.track) {
+                // Return a NEW MediaStream so React detects the state change
+                setRemoteStream((prev) => {
+                  const newStream = new MediaStream(prev ? prev.getTracks() : []);
+                  if (!newStream.getTracks().some((t) => t.id === e.track.id)) {
+                    newStream.addTrack(e.track);
+                  }
+                  return newStream;
+                });
+                setConnectionStatus("connected");
+              }
+            };
 
-          pc.onicecandidate = (e) => {
-            if (e.candidate) {
-              sendSignal(fromPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
-            }
-          };
+            pc.ondatachannel = (e) => {
+              guestDataChannelRef.current = e.channel;
+              e.channel.onclose = () => { guestDataChannelRef.current = null; };
+            };
 
-          pc.oniceconnectionstatechange = () => {
-            if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
-              setConnectionStatus("connected");
-            } else if (pc.iceConnectionState === "failed") {
-              setConnectionStatus("error");
-            }
-          };
+            pc.onicecandidate = (e) => {
+              if (e.candidate) {
+                sendSignal(fromPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
+              }
+            };
 
-          pc.onconnectionstatechange = () => {
-            if (pc.connectionState === "connected") {
-              setConnectionStatus("connected");
-            } else if (pc.connectionState === "failed") {
-              setConnectionStatus("error");
-            }
-          };
+            pc.oniceconnectionstatechange = () => {
+              if (pc!.iceConnectionState === "connected" || pc!.iceConnectionState === "completed") {
+                setConnectionStatus("connected");
+              } else if (pc!.iceConnectionState === "failed") {
+                setConnectionStatus("error");
+              }
+            };
+
+            pc.onconnectionstatechange = () => {
+              if (pc!.connectionState === "connected") {
+                setConnectionStatus("connected");
+              } else if (pc!.connectionState === "failed") {
+                setConnectionStatus("error");
+              }
+            };
+          }
 
           await pc.setRemoteDescription(new RTCSessionDescription(data.sdp as RTCSessionDescriptionInit));
 
           // Flush any queued ICE candidates for this peer
-          const queued = iceCandidateQueueRef.current.get(fromPeerId) || [];
-          for (const cand of queued) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(cand));
-            } catch (candErr) {
-              console.warn("Error adding queued ICE candidate:", candErr);
+          if (!isRenegotiation) {
+            const queued = iceCandidateQueueRef.current.get(fromPeerId) || [];
+            for (const cand of queued) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand));
+              } catch (candErr) {
+                console.warn("Error adding queued ICE candidate:", candErr);
+              }
             }
+            iceCandidateQueueRef.current.delete(fromPeerId);
           }
-          iceCandidateQueueRef.current.delete(fromPeerId);
 
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
@@ -402,8 +420,13 @@ export default function SessionPage() {
 
         if (msg.type === "room-state") {
           if (msg.slots) setSlots(msg.slots as SlotState);
-          if (msg.peers) setParticipants(msg.peers as ParticipantInfo[]);
+          if (msg.peers) {
+            const peers = msg.peers as ParticipantInfo[];
+            setParticipants(peers);
+            participantsRef.current = peers;
+          }
           if (msg.romName) setActiveRomName(msg.romName as string);
+          if (msg.hostPeerId) hostPeerIdRef.current = msg.hostPeerId as string;
         }
 
         if (msg.type === "slot-state") {
@@ -411,14 +434,18 @@ export default function SessionPage() {
         }
 
         if (msg.type === "participant-joined") {
-          setParticipants((prev) => [
-            ...prev.filter((p) => p.peerId !== msg.peerId),
-            {
-              peerId: msg.peerId as string,
-              playerName: msg.playerName as string,
-              role: msg.role as "host" | "guest",
-            },
-          ]);
+          setParticipants((prev) => {
+            const next = [
+              ...prev.filter((p) => p.peerId !== msg.peerId),
+              {
+                peerId: msg.peerId as string,
+                playerName: msg.playerName as string,
+                role: msg.role as "host" | "guest",
+              },
+            ];
+            participantsRef.current = next;
+            return next;
+          });
         }
 
         if (msg.type === "chat") {
@@ -440,14 +467,25 @@ export default function SessionPage() {
         }
 
         if (msg.type === "host-info" && !isHost) {
+          hostPeerIdRef.current = msg.hostPeerId as string;
           setConnectionStatus("connecting");
         }
 
         if (msg.type === "no-host" && !isHost) {
+          hostPeerIdRef.current = null;
+          setRemoteStream(null);
           setConnectionStatus("error");
           toast({
             title: "Host not online",
             description: "Waiting for the host to launch the game.",
+            variant: "destructive",
+          });
+        }
+
+        if (msg.type === "error") {
+          toast({
+            title: "Action Failed",
+            description: (msg.message as string) || "Could not complete action",
             variant: "destructive",
           });
         }
@@ -463,12 +501,23 @@ export default function SessionPage() {
             pc.close();
             peerConnsRef.current.delete(peerId);
           }
-          dataChannelsRef.current.delete(peerId);
+          const dc = dataChannelsRef.current.get(peerId);
+          if (dc) {
+            dc.close();
+            dataChannelsRef.current.delete(peerId);
+          }
           pendingGuestsRef.current.delete(peerId);
           iceCandidateQueueRef.current.delete(peerId);
-          setParticipants((prev) => prev.filter((p) => p.peerId !== peerId));
+          setParticipants((prev) => {
+            const next = prev.filter((p) => p.peerId !== peerId);
+            participantsRef.current = next;
+            return next;
+          });
 
-          if (!isHost && peerId === session.hostId) {
+          // Detect host leaving using tracked hostPeerId (not database ID)
+          if (!isHost && peerId === hostPeerIdRef.current) {
+            hostPeerIdRef.current = null;
+            guestDataChannelRef.current = null;
             setRemoteStream(null);
             setConnectionStatus("idle");
           }
@@ -479,33 +528,31 @@ export default function SessionPage() {
     ws.onerror = () => setConnectionStatus("error");
 
     return () => {
-      ws.send(JSON.stringify({ type: "leave", sessionCode: code, peerId: myPeerId.current }));
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "leave", sessionCode: code, peerId: myPeerId.current }));
+      }
       ws.close();
       peerConnsRef.current.forEach((pc) => pc.close());
       peerConnsRef.current.clear();
+      dataChannelsRef.current.forEach((dc) => dc.close());
       dataChannelsRef.current.clear();
       iceCandidateQueueRef.current.clear();
     };
   }, [code, isHost, myPlayerName, session?.code, createHostOffer, handleSignal, toast]);
 
-  const participantsRef = useRef(participants);
-  participantsRef.current = participants;
-
   // Bind remote stream to HTML5 video element with auto-recovery
   useEffect(() => {
     if (videoRef.current && remoteStream) {
       videoRef.current.srcObject = remoteStream;
-      videoRef.current.muted = true; // Start muted to ensure 100% immediate video playback
+      videoRef.current.muted = true; // Start muted to ensure immediate playback
       videoRef.current
         .play()
         .then(() => {
           setConnectionStatus("connected");
-          if (videoRef.current && !isMuted) {
-            videoRef.current.muted = false;
-          }
+          setAudioBlocked(false);
         })
         .catch((err) => {
-          console.warn("Autoplay with audio blocked, playing muted video:", err);
+          console.warn("Autoplay blocked, playing muted video:", err);
           setAudioBlocked(true);
           if (videoRef.current) {
             videoRef.current.muted = true;
@@ -513,7 +560,7 @@ export default function SessionPage() {
           }
         });
     }
-  }, [remoteStream, isMuted]);
+  }, [remoteStream]);
 
   // Handle guest volume and mute adjustments
   useEffect(() => {
@@ -662,6 +709,9 @@ export default function SessionPage() {
     const actionMap = mySlot === 2 ? KEY_ACTIONS_P2 : KEY_ACTIONS_P1;
 
     const forwardKey = (e: KeyboardEvent, type: "keydown" | "keyup") => {
+      // Ignore synthetic events dispatched by handleInputEvent to prevent infinite loop
+      if (!e.isTrusted) return;
+
       // Don't intercept if user is typing in chat input
       if (
         document.activeElement?.tagName === "INPUT" ||
@@ -700,23 +750,6 @@ export default function SessionPage() {
     };
   }, [mySlot, handleInputEvent, handleButtonActivity]);
 
-  // Wire video stream and handle audio autoplay
-  useEffect(() => {
-    if (videoRef.current && remoteStream) {
-      videoRef.current.srcObject = remoteStream;
-      videoRef.current.volume = volume;
-      videoRef.current.muted = isMuted;
-
-      videoRef.current
-        .play()
-        .then(() => setAudioBlocked(false))
-        .catch((err) => {
-          if (err.name === "NotAllowedError") {
-            setAudioBlocked(true);
-          }
-        });
-    }
-  }, [remoteStream, volume, isMuted]);
 
   const handleLoadRomFile = async (file: File) => {
     const url = await setRom(file);

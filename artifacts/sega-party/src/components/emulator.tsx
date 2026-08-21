@@ -87,6 +87,12 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
     } catch {}
     delete (window as unknown as { EJS_emulator?: unknown }).EJS_emulator;
 
+    // Reset audio stream reference for fresh capture
+    if (window.__emulatorAudioStream) {
+      window.__emulatorAudioStream.getTracks().forEach((t) => t.stop());
+      window.__emulatorAudioStream = null;
+    }
+
     streamReadyFired.current = false;
 
     window.EJS_player = "#game";
@@ -155,11 +161,15 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
       },
     };
 
+    // Track all pending timers for cleanup
+    const pendingTimeouts: ReturnType<typeof setTimeout>[] = [];
+    let audioPollId: ReturnType<typeof setInterval> | null = null;
+    let audioPollTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
     const tryCapture = (): boolean => {
       if (streamReadyFired.current || !onStreamReadyRef.current) return true;
-      const canvas = (document.querySelector("#game canvas") ||
-        document.querySelector("canvas") ||
-        (document.querySelector("#game iframe") as HTMLIFrameElement)?.contentDocument?.querySelector("canvas")) as HTMLCanvasElement | null;
+      // Only look inside #game — never grab unrelated canvas elements
+      const canvas = document.querySelector("#game canvas") as HTMLCanvasElement | null;
       if (!canvas) return false;
 
       try {
@@ -173,10 +183,12 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
         videoStream.getVideoTracks().forEach((vt) => composite.addTrack(vt));
 
         // Add captured audio track if available
+        let audioAlreadyAttached = false;
         if (window.__emulatorAudioStream) {
           const audioTracks = window.__emulatorAudioStream.getAudioTracks();
           if (audioTracks.length > 0) {
             composite.addTrack(audioTracks[0]);
+            audioAlreadyAttached = true;
           }
         }
 
@@ -187,18 +199,24 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
         }
         onStreamReadyRef.current(composite);
 
-        // Keep checking for late audio stream initialization
-        const audioPoll = setInterval(() => {
-          if (window.__emulatorAudioStream && onAudioTrackAddedRef.current) {
-            const audioTracks = window.__emulatorAudioStream.getAudioTracks();
-            if (audioTracks.length > 0) {
-              onAudioTrackAddedRef.current(audioTracks[0]);
-              clearInterval(audioPoll);
+        // Only poll for late audio if it wasn't already attached
+        if (!audioAlreadyAttached) {
+          audioPollId = setInterval(() => {
+            if (window.__emulatorAudioStream && onAudioTrackAddedRef.current) {
+              const audioTracks = window.__emulatorAudioStream.getAudioTracks();
+              if (audioTracks.length > 0) {
+                onAudioTrackAddedRef.current(audioTracks[0]);
+                if (audioPollId) clearInterval(audioPollId);
+                audioPollId = null;
+              }
             }
-          }
-        }, 800);
+          }, 800);
 
-        setTimeout(() => clearInterval(audioPoll), 20000);
+          audioPollTimeoutId = setTimeout(() => {
+            if (audioPollId) clearInterval(audioPollId);
+            audioPollId = null;
+          }, 20000);
+        }
 
         return true;
       } catch (err) {
@@ -209,9 +227,9 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
 
     window.EJS_onGameStart = () => {
       if (tryCapture()) return;
-      setTimeout(tryCapture, 400);
-      setTimeout(tryCapture, 1200);
-      setTimeout(tryCapture, 2500);
+      pendingTimeouts.push(setTimeout(tryCapture, 400));
+      pendingTimeouts.push(setTimeout(tryCapture, 1200));
+      pendingTimeouts.push(setTimeout(tryCapture, 2500));
     };
 
     let pollAttempts = 0;
@@ -232,17 +250,39 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
     document.body.appendChild(script);
 
     return () => {
+      // Clear all tracked timers
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
         pollIntervalRef.current = null;
       }
+      for (const t of pendingTimeouts) clearTimeout(t);
+      if (audioPollId) clearInterval(audioPollId);
+      if (audioPollTimeoutId) clearTimeout(audioPollTimeoutId);
+
+      // Remove the loader script tag
       if (document.body.contains(script)) {
         document.body.removeChild(script);
       }
+
+      // Remove injected emulator scripts from <head>
+      document.querySelectorAll('head script[src*="emulatorjs/src/"]').forEach((s) => s.remove());
+      document.querySelectorAll('head link[href*="emulatorjs/"]').forEach((s) => s.remove());
+
+      // Stop and destroy the emulator instance
       try {
         (window as unknown as { EJS_emulator?: { stop?: () => void } }).EJS_emulator?.stop?.();
       } catch {}
       delete (window as unknown as { EJS_emulator?: unknown }).EJS_emulator;
+
+      // Clean up audio stream
+      if (window.__emulatorAudioStream) {
+        window.__emulatorAudioStream.getTracks().forEach((t) => t.stop());
+        window.__emulatorAudioStream = null;
+      }
+
+      // Clean up global EJS properties
+      delete (window as unknown as Record<string, unknown>).EJS_onGameStart;
+      delete (window as unknown as Record<string, unknown>).EJS_defaultControls;
     };
   }, [romUrl]);
 
