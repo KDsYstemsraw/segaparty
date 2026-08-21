@@ -341,17 +341,33 @@ export default function SessionPage() {
 
             pc.ontrack = (e) => {
               setWebrtcStatus((prev) => ({ ...prev, tracks: prev.tracks + 1 }));
-              const incomingStream = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
-              setRemoteStream((prev) => {
-                const newStream = new MediaStream(prev ? prev.getTracks() : []);
-                if (!newStream.getTracks().some((t) => t.id === e.track.id)) {
-                  newStream.addTrack(e.track);
-                }
-                attachGuestWebAudio(newStream);
-                return newStream;
-              });
-              attachGuestWebAudio(incomingStream);
-              setConnectionStatus("connected");
+              if (e.streams && e.streams[0]) {
+                const stream = e.streams[0];
+                setRemoteStream(stream);
+                setConnectionStatus("connected");
+
+                e.track.addEventListener("unmute", () => {
+                  if (videoRef.current) {
+                    videoRef.current.srcObject = stream;
+                    videoRef.current.play().catch(() => {});
+                  }
+                }, { once: true });
+              } else if (e.track) {
+                setRemoteStream((prev) => {
+                  const newStream = new MediaStream(prev ? prev.getTracks() : []);
+                  if (!newStream.getTracks().some((t) => t.id === e.track.id)) {
+                    newStream.addTrack(e.track);
+                  }
+                  e.track.addEventListener("unmute", () => {
+                    if (videoRef.current) {
+                      videoRef.current.srcObject = newStream;
+                      videoRef.current.play().catch(() => {});
+                    }
+                  }, { once: true });
+                  return newStream;
+                });
+                setConnectionStatus("connected");
+              }
             };
 
             pc.ondatachannel = (e) => {
@@ -880,6 +896,11 @@ export default function SessionPage() {
   const unlockAudio = () => {
     setIsMuted(false);
     setAudioBlocked(false);
+    if (videoRef.current) {
+      videoRef.current.muted = false;
+      videoRef.current.volume = volume;
+      videoRef.current.play().catch(() => {});
+    }
     if (guestAudioCtxRef.current) {
       if (guestAudioCtxRef.current.state === "suspended") {
         guestAudioCtxRef.current.resume().catch(() => {});
@@ -887,9 +908,6 @@ export default function SessionPage() {
       if (guestGainNodeRef.current) {
         guestGainNodeRef.current.gain.value = volume;
       }
-    }
-    if (videoRef.current) {
-      videoRef.current.play().catch(() => {});
     }
   };
 

@@ -169,65 +169,74 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
     const tryCapture = (): boolean => {
       if (streamReadyFired.current || !onStreamReadyRef.current) return true;
 
-      const ejs = (window as unknown as {
-        EJS_emulator?: {
-          canvas?: HTMLCanvasElement;
-          collectScreenRecordingMediaTracks?: (canvas: HTMLCanvasElement, fps: number) => MediaStream;
-        };
-      }).EJS_emulator;
-
-      const sourceCanvas = ejs?.canvas || (document.querySelector("#game canvas") as HTMLCanvasElement | null);
+      const sourceCanvas = document.querySelector("#game canvas") as HTMLCanvasElement | null;
       if (!sourceCanvas) return false;
 
       try {
-        let stream: MediaStream | null = null;
-        if (typeof ejs?.collectScreenRecordingMediaTracks === "function") {
-          stream = ejs.collectScreenRecordingMediaTracks(sourceCanvas, 60);
-        }
+        const captureFn = sourceCanvas.captureStream || (sourceCanvas as unknown as { mozCaptureStream?: () => MediaStream }).mozCaptureStream;
+        if (!captureFn) return false;
 
-        if (!stream || stream.getVideoTracks().length === 0) {
-          const captureFn = sourceCanvas.captureStream || (sourceCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
-          if (!captureFn) return false;
+        const videoStream = captureFn.call(sourceCanvas);
+        const videoTracks = videoStream.getVideoTracks();
+        if (videoTracks.length === 0) return false;
 
-          const videoStream = captureFn.call(sourceCanvas, 60);
-          if (videoStream.getVideoTracks().length === 0) return false;
+        const composite = new MediaStream();
+        composite.addTrack(videoTracks[0]);
 
-          const composite = new MediaStream();
-          videoStream.getVideoTracks().forEach((vt) => composite.addTrack(vt));
-          if (window.__emulatorAudioStream) {
-            window.__emulatorAudioStream.getAudioTracks().forEach((at) => composite.addTrack(at));
+        // Capture OpenAL audio from EmulatorJS / Emscripten AL context (Playtime pattern)
+        const AL = (window as unknown as { EJS_emulator?: { Module?: { AL?: unknown } } }).EJS_emulator?.Module?.AL || (window as unknown as { AL?: unknown }).AL;
+        if (AL && (AL as { currentCtx?: { audioCtx?: AudioContext; sources?: Record<string, { gain: AudioNode }> } }).currentCtx?.audioCtx) {
+          const alContext = (AL as { currentCtx: { audioCtx: AudioContext; sources: Record<string, { gain: AudioNode }> } }).currentCtx;
+          const audioContext = alContext.audioCtx;
+          const gainNodes: AudioNode[] = [];
+          for (const sourceIdx in alContext.sources) {
+            if (alContext.sources[sourceIdx]?.gain) {
+              gainNodes.push(alContext.sources[sourceIdx].gain);
+            }
           }
-          stream = composite;
+          if (gainNodes.length > 0) {
+            const merger = audioContext.createChannelMerger(gainNodes.length);
+            gainNodes.forEach((node) => node.connect(merger));
+            const destination = audioContext.createMediaStreamDestination();
+            merger.connect(destination);
+            const audioTracks = destination.stream.getAudioTracks();
+            if (audioTracks.length > 0) {
+              composite.addTrack(audioTracks[0]);
+            }
+          }
+        } else if (window.__emulatorAudioStream) {
+          window.__emulatorAudioStream.getAudioTracks().forEach((at) => composite.addTrack(at));
         }
-
-        if (!stream || stream.getVideoTracks().length === 0) return false;
-
-        // Apply Kosmi content hints for 60 FPS pixel precision & uncompressed audio
-        stream.getVideoTracks().forEach((vt) => {
-          if ("contentHint" in vt) (vt as unknown as { contentHint: string }).contentHint = "motion";
-        });
-        stream.getAudioTracks().forEach((at) => {
-          if ("contentHint" in at) (at as unknown as { contentHint: string }).contentHint = "music";
-        });
 
         streamReadyFired.current = true;
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
         }
-        onStreamReadyRef.current(stream);
+        onStreamReadyRef.current(composite);
 
-        // Check for late OpenAL audio if not yet present in initial stream
-        if (stream.getAudioTracks().length === 0) {
+        // Check for late OpenAL audio if not yet captured initially
+        if (composite.getAudioTracks().length === 0) {
           audioPollId = setInterval(() => {
-            if (ejs && typeof ejs.collectScreenRecordingMediaTracks === "function" && sourceCanvas && onAudioTrackAddedRef.current) {
-              const fullStream = ejs.collectScreenRecordingMediaTracks(sourceCanvas, 60);
-              const audioTracks = fullStream?.getAudioTracks() || [];
-              if (audioTracks.length > 0) {
-                onAudioTrackAddedRef.current(audioTracks[0]);
-                if (audioPollId) clearInterval(audioPollId);
-                audioPollId = null;
-                return;
+            const curAL = (window as unknown as { EJS_emulator?: { Module?: { AL?: unknown } } }).EJS_emulator?.Module?.AL || (window as unknown as { AL?: unknown }).AL;
+            if (curAL && (curAL as { currentCtx?: { audioCtx?: AudioContext; sources?: Record<string, { gain: AudioNode }> } }).currentCtx?.audioCtx && onAudioTrackAddedRef.current) {
+              const alCtx = (curAL as { currentCtx: { audioCtx: AudioContext; sources: Record<string, { gain: AudioNode }> } }).currentCtx;
+              const gNodes: AudioNode[] = [];
+              for (const sIdx in alCtx.sources) {
+                if (alCtx.sources[sIdx]?.gain) gNodes.push(alCtx.sources[sIdx].gain);
+              }
+              if (gNodes.length > 0) {
+                const m = alCtx.audioCtx.createChannelMerger(gNodes.length);
+                gNodes.forEach((n) => n.connect(m));
+                const d = alCtx.audioCtx.createMediaStreamDestination();
+                m.connect(d);
+                const aTracks = d.stream.getAudioTracks();
+                if (aTracks.length > 0) {
+                  onAudioTrackAddedRef.current(aTracks[0]);
+                  if (audioPollId) clearInterval(audioPollId);
+                  audioPollId = null;
+                  return;
+                }
               }
             }
             if (window.__emulatorAudioStream && onAudioTrackAddedRef.current) {
