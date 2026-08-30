@@ -185,7 +185,13 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
           captureCanvas = document.createElement("canvas");
           captureCanvas.width = width;
           captureCanvas.height = height;
-          captureCanvas.style.display = "none";
+          captureCanvas.style.position = "fixed";
+          captureCanvas.style.top = "-9999px";
+          captureCanvas.style.left = "-9999px";
+          captureCanvas.style.width = `${width}px`;
+          captureCanvas.style.height = `${height}px`;
+          captureCanvas.style.opacity = "0";
+          captureCanvas.style.pointerEvents = "none";
           document.body.appendChild(captureCanvas);
           captureCtx = captureCanvas.getContext("2d", { alpha: false });
           if (captureCtx) {
