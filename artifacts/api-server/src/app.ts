@@ -44,8 +44,8 @@ const staticDir = possibleStaticDirs.find((dir) => fs.existsSync(dir));
 
 if (staticDir) {
   app.use(express.static(staticDir));
-  app.get("*", (req, res, next) => {
-    if (!req.path.startsWith("/api") && !req.path.startsWith("/ws")) {
+  app.use((req, res, next) => {
+    if (req.method === "GET" && !req.path.startsWith("/api") && !req.path.startsWith("/ws")) {
       res.sendFile(path.resolve(staticDir, "index.html"));
     } else {
       next();
