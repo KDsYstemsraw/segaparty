@@ -1,4 +1,4 @@
-﻿export interface SampleRom {
+export interface SampleRom {
   id: string;
   name: string;
   category: string;
@@ -15,7 +15,7 @@ export const SAMPLE_ROMS: SampleRom[] = [
     category: "Platformer",
     players: "2 Players (Split-Screen)",
     description: "Classic split-screen head-to-head race between Sonic and Tails. Supports 2 controllers.",
-    url: "https://raw.githubusercontent.com/demoscene-archive/sega-roms/main/demos/sonic2_demo.bin",
+    url: "/roms/sonic2_demo.bin",
     badge: "2-Player Split Screen",
   },
   {
@@ -24,7 +24,7 @@ export const SAMPLE_ROMS: SampleRom[] = [
     category: "Arcade / Sports",
     players: "1-2 Players",
     description: "Fast-paced 2-player retro arcade paddle battle with power-ups and stereo sound effects.",
-    url: "https://raw.githubusercontent.com/demoscene-archive/sega-roms/main/demos/megapong.bin",
+    url: "/roms/megapong.bin",
     badge: "2 Players",
   },
   {
@@ -33,7 +33,7 @@ export const SAMPLE_ROMS: SampleRom[] = [
     category: "Action Shooter",
     players: "1-4 Players (Multitap)",
     description: "Retro multi-tap 4-player cooperative and vs space arena combat.",
-    url: "https://raw.githubusercontent.com/demoscene-archive/sega-roms/main/demos/spaceblast.bin",
+    url: "/roms/spaceblast.bin",
     badge: "4 Players Multitap",
   },
   {
@@ -42,7 +42,7 @@ export const SAMPLE_ROMS: SampleRom[] = [
     category: "Utility",
     players: "1-4 Controllers",
     description: "Calibration suite and input latency tester. Test all 4 controllers, audio panning, and 240p video timing.",
-    url: "https://raw.githubusercontent.com/demoscene-archive/sega-roms/main/demos/240pSuite.bin",
+    url: "/roms/240pSuite.bin",
     badge: "Controller Test",
   },
 ];

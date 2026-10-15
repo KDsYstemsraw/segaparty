@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Monitor, Tv, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-interface EmulatorProps {
+export interface EmulatorProps {
   romUrl: string;
   onStreamReady?: (stream: MediaStream) => void;
   onAudioTrackAdded?: (track: MediaStreamTrack) => void;
+  onVideoFrame?: (dataUrl: string) => void;
+  onAudioChunk?: (pcmBase64: string, sampleRate: number) => void;
 }
 
 declare global {
@@ -18,13 +20,35 @@ declare global {
     EJS_defaultControls?: Record<number, Record<number, { value: string; value2?: string }>>;
     EJS_onGameStart: () => void;
     __emulatorAudioStream?: MediaStream | null;
+    __onEmulatorAudioChunk?: (pcmBase64: string, sampleRate: number) => void;
   }
 }
 
-// Intercept Web Audio connections so emulator audio is mirrored to a MediaStream
+// Hook WebGL getContext to enforce preserveDrawingBuffer: true so direct canvas.captureStream
+// and canvas.toDataURL work reliably without black/flickering frames.
+function installWebGLCaptureHook() {
+  if (typeof window === "undefined") return;
+  const proto = HTMLCanvasElement.prototype as unknown as {
+    getContext: (type: string, attrs?: Record<string, unknown>) => unknown;
+    __webglPatched?: boolean;
+  };
+  if (proto.__webglPatched) return;
+  const origGetContext = proto.getContext;
+  proto.getContext = function (this: HTMLCanvasElement, type: string, attrs?: Record<string, unknown>) {
+    if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") {
+      attrs = { ...(attrs || {}), preserveDrawingBuffer: true };
+    }
+    return origGetContext.call(this, type, attrs);
+  };
+  proto.__webglPatched = true;
+}
+
+// Intercept Web Audio connections so emulator audio is mirrored to a MediaStream and PCM tap
 function installAudioCaptureHook() {
   if (typeof window === "undefined") return;
-  const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const AudioContextClass =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextClass || (AudioContextClass as unknown as { __patched?: boolean }).__patched) return;
 
   const proto = AudioNode.prototype as unknown as { connect: (...args: unknown[]) => unknown };
@@ -33,15 +57,85 @@ function installAudioCaptureHook() {
   proto.connect = function (this: AudioNode, destination: unknown, ...rest: unknown[]) {
     try {
       const ctx = this.context as AudioContext | undefined;
-      if (ctx && destination === ctx.destination && typeof ctx.createMediaStreamDestination === "function") {
-        if (!(ctx as unknown as { __streamDest?: MediaStreamAudioDestinationNode }).__streamDest) {
-          const streamDest = ctx.createMediaStreamDestination();
-          (ctx as unknown as { __streamDest: MediaStreamAudioDestinationNode }).__streamDest = streamDest;
-          window.__emulatorAudioStream = streamDest.stream;
+      const isInternal = (this as unknown as { __isInternalAudio?: boolean }).__isInternalAudio;
+      if (ctx && destination === ctx.destination && !isInternal) {
+        // 1. MediaStreamDestination for WebRTC
+        if (typeof ctx.createMediaStreamDestination === "function") {
+          if (!(ctx as unknown as { __streamDest?: MediaStreamAudioDestinationNode }).__streamDest) {
+            const streamDest = ctx.createMediaStreamDestination();
+            (ctx as unknown as { __streamDest: MediaStreamAudioDestinationNode }).__streamDest = streamDest;
+            window.__emulatorAudioStream = streamDest.stream;
+          }
+          const streamDest = (ctx as unknown as { __streamDest?: MediaStreamAudioDestinationNode }).__streamDest;
+          if (streamDest) {
+            origConnect.call(this, streamDest as unknown as AudioNode);
+          }
         }
-        const streamDest = (ctx as unknown as { __streamDest?: MediaStreamAudioDestinationNode }).__streamDest;
-        if (streamDest) {
-          origConnect.call(this, streamDest as unknown as AudioNode);
+
+        // 2. PCM Audio Chunk Tap via ScriptProcessorNode for WebSocket broadcast
+        if (
+          !(ctx as unknown as { __pcmTap?: ScriptProcessorNode }).__pcmTap &&
+          typeof ctx.createScriptProcessor === "function"
+        ) {
+          try {
+            const pcmTap = ctx.createScriptProcessor(2048, 1, 1);
+            const silentGain = ctx.createGain();
+            silentGain.gain.value = 0;
+            (pcmTap as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
+            (silentGain as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
+
+            pcmTap.onaudioprocess = (e: AudioProcessingEvent) => {
+              const cb = window.__onEmulatorAudioChunk;
+              if (!cb) return;
+
+              const input = e.inputBuffer.getChannelData(0);
+              let hasSound = false;
+              for (let i = 0; i < input.length; i++) {
+                if (Math.abs(input[i]) > 0.001) {
+                  hasSound = true;
+                  break;
+                }
+              }
+              if (!hasSound) return;
+
+              // Downsample by 2x if sampleRate >= 44100 to conserve bandwidth
+              const downsample = ctx.sampleRate >= 44100;
+              const step = downsample ? 2 : 1;
+              const outLen = Math.floor(input.length / step);
+              const int16 = new Int16Array(outLen);
+              const outSampleRate = downsample ? Math.floor(ctx.sampleRate / 2) : ctx.sampleRate;
+
+              let outIdx = 0;
+              for (let i = 0; i < input.length; i += step) {
+                const s = Math.max(-1, Math.min(1, input[i]));
+                int16[outIdx++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+              }
+
+              // Encode to Base64
+              const uint8 = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+              let binary = "";
+              const chunkSize = 8192;
+              for (let i = 0; i < uint8.length; i += chunkSize) {
+                const sub = uint8.subarray(i, i + chunkSize);
+                binary += String.fromCharCode.apply(null, sub as unknown as number[]);
+              }
+              const base64 = btoa(binary);
+              cb(base64, outSampleRate);
+            };
+
+            (ctx as unknown as { __pcmTap: ScriptProcessorNode }).__pcmTap = pcmTap;
+            (ctx as unknown as { __silentGain: GainNode }).__silentGain = silentGain;
+
+            origConnect.call(pcmTap, silentGain);
+            origConnect.call(silentGain, ctx.destination);
+          } catch (e) {
+            console.warn("PCM audio tap setup failed:", e);
+          }
+        }
+
+        const pcmTap = (ctx as unknown as { __pcmTap?: ScriptProcessorNode }).__pcmTap;
+        if (pcmTap) {
+          origConnect.call(this, pcmTap);
         }
       }
     } catch {
@@ -53,11 +147,19 @@ function installAudioCaptureHook() {
   (AudioContextClass as unknown as { __patched: boolean }).__patched = true;
 }
 
-// Call immediately upon module import
+// Call hooks immediately upon module import
+installWebGLCaptureHook();
 installAudioCaptureHook();
 
 
-export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorProps) {
+
+export function Emulator({
+  romUrl,
+  onStreamReady,
+  onAudioTrackAdded,
+  onVideoFrame,
+  onAudioChunk,
+}: EmulatorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamReadyFired = useRef(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -68,13 +170,24 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
   const onAudioTrackAddedRef = useRef(onAudioTrackAdded);
   onAudioTrackAddedRef.current = onAudioTrackAdded;
 
+  const onVideoFrameRef = useRef(onVideoFrame);
+  onVideoFrameRef.current = onVideoFrame;
+
+  const onAudioChunkRef = useRef(onAudioChunk);
+  onAudioChunkRef.current = onAudioChunk;
+
   const [crtFilter, setCrtFilter] = useState(false);
   const [aspect43, setAspect43] = useState(true);
 
   useEffect(() => {
     if (!containerRef.current) return;
 
+    installWebGLCaptureHook();
     installAudioCaptureHook();
+
+    window.__onEmulatorAudioChunk = (pcmBase64: string, sampleRate: number) => {
+      onAudioChunkRef.current?.(pcmBase64, sampleRate);
+    };
 
     // Clean up any existing emulator instances or previous game DOM nodes
     const gameEl = document.getElementById("game");
@@ -101,11 +214,11 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
     window.EJS_pathtodata = "/emulatorjs/";
     window.EJS_startOnLoaded = true;
 
-    // Configure conflict-free default mappings for 4 players
+    // Configure conflict-free default mappings aligned with RetroPad indices (0: B, 1: A, 8: C, 9: Y, 10: X, 11: Z)
     window.EJS_defaultControls = {
       0: { // Player 1
-        0: { value: "z" },          // A
-        1: { value: "x" },          // B
+        0: { value: "x" },          // B
+        1: { value: "z" },          // A
         2: { value: " " },          // MODE
         3: { value: "enter" },      // START
         4: { value: "up arrow" },   // DPAD_UP
@@ -113,51 +226,51 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
         6: { value: "left arrow" }, // DPAD_LEFT
         7: { value: "right arrow" },// DPAD_RIGHT
         8: { value: "c" },          // C
-        9: { value: "a" },          // X
-        10: { value: "s" },         // Y
+        9: { value: "s" },          // Y
+        10: { value: "a" },         // X
         11: { value: "d" },         // Z
       },
       1: { // Player 2
-        0: { value: "u" },
-        1: { value: "o" },
-        2: { value: "-" },
-        3: { value: "0" },
-        4: { value: "i" },
-        5: { value: "k" },
-        6: { value: "j" },
-        7: { value: "l" },
-        8: { value: "p" },
-        9: { value: "7" },
-        10: { value: "8" },
-        11: { value: "9" },
+        0: { value: "o" },          // B
+        1: { value: "u" },          // A
+        2: { value: "-" },          // MODE
+        3: { value: "0" },          // START
+        4: { value: "i" },          // DPAD_UP
+        5: { value: "k" },          // DPAD_DOWN
+        6: { value: "j" },          // DPAD_LEFT
+        7: { value: "l" },          // DPAD_RIGHT
+        8: { value: "p" },          // C
+        9: { value: "8" },          // Y
+        10: { value: "7" },         // X
+        11: { value: "9" },         // Z
       },
       2: { // Player 3
-        0: { value: "v" },
-        1: { value: "b" },
-        2: { value: "2" },
-        3: { value: "1" },
-        4: { value: "t" },
-        5: { value: "g" },
-        6: { value: "f" },
-        7: { value: "h" },
-        8: { value: "n" },
-        9: { value: "4" },
-        10: { value: "5" },
-        11: { value: "6" },
+        0: { value: "b" },          // B
+        1: { value: "v" },          // A
+        2: { value: "2" },          // MODE
+        3: { value: "1" },          // START
+        4: { value: "t" },          // DPAD_UP
+        5: { value: "g" },          // DPAD_DOWN
+        6: { value: "f" },          // DPAD_LEFT
+        7: { value: "h" },          // DPAD_RIGHT
+        8: { value: "n" },          // C
+        9: { value: "5" },          // Y
+        10: { value: "4" },         // X
+        11: { value: "6" },         // Z
       },
       3: { // Player 4
-        0: { value: "1" },
-        1: { value: "3" },
-        2: { value: "." },
-        3: { value: "enter" },
-        4: { value: "8" },
-        5: { value: "2" },
-        6: { value: "4" },
-        7: { value: "6" },
-        8: { value: "5" },
-        9: { value: "7" },
-        10: { value: "9" },
-        11: { value: "+" },
+        0: { value: "3" },          // B
+        1: { value: "1" },          // A
+        2: { value: "." },          // MODE
+        3: { value: "enter" },      // START
+        4: { value: "8" },          // DPAD_UP
+        5: { value: "2" },          // DPAD_DOWN
+        6: { value: "4" },          // DPAD_LEFT
+        7: { value: "6" },          // DPAD_RIGHT
+        8: { value: "5" },          // C
+        9: { value: "9" },          // Y
+        10: { value: "7" },         // X
+        11: { value: "+" },         // Z
       },
     };
 
@@ -166,60 +279,119 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
     let audioPollId: ReturnType<typeof setInterval> | null = null;
     let audioPollTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
-    // 2D Intermediate Capture Buffer Pump for WebGL (avoids preserveDrawingBuffer: false black screen)
+    // WebSocket / Broadcast frame capture canvas & interval (~15 FPS)
+    let frameCanvas: HTMLCanvasElement | null = null;
+    let frameCtx: CanvasRenderingContext2D | null = null;
+    let frameBroadcastId: ReturnType<typeof setInterval> | null = null;
+
+    // 2D Intermediate Capture Buffer Pump for WebGL (fallback if sourceCanvas.captureStream fails)
     let captureCanvas: HTMLCanvasElement | null = null;
     let captureCtx: CanvasRenderingContext2D | null = null;
     let animFrameId: number | null = null;
 
     const tryCapture = (): boolean => {
-      if (streamReadyFired.current || !onStreamReadyRef.current) return true;
-
       const sourceCanvas = document.querySelector("#game canvas") as HTMLCanvasElement | null;
-      if (!sourceCanvas) return false;
+      if (!sourceCanvas || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) return false;
+
+      // Start 15 FPS frame broadcast interval if onVideoFrame is requested
+      if (!frameBroadcastId) {
+        frameCanvas = document.createElement("canvas");
+        frameCanvas.width = 320;
+        frameCanvas.height = 224;
+        frameCtx = frameCanvas.getContext("2d", { alpha: false });
+        if (frameCtx) {
+          frameCtx.imageSmoothingEnabled = false;
+        }
+
+        frameBroadcastId = setInterval(() => {
+          if (!onVideoFrameRef.current || !sourceCanvas || !frameCtx || !frameCanvas) return;
+          if (sourceCanvas.width === 0 || sourceCanvas.height === 0) return;
+          try {
+            frameCtx.drawImage(sourceCanvas, 0, 0, 320, 224);
+            const dataUrl = frameCanvas.toDataURL("image/jpeg", 0.6);
+            onVideoFrameRef.current(dataUrl);
+          } catch {
+            // Ignore capture error if canvas temporarily not ready
+          }
+        }, 66);
+      }
+
+      if (streamReadyFired.current) return true;
+      if (!onStreamReadyRef.current) {
+        streamReadyFired.current = true;
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+        return true;
+      }
 
       try {
-        const width = sourceCanvas.width || 320;
-        const height = sourceCanvas.height || 224;
+        let videoStream: MediaStream | null = null;
 
-        if (!captureCanvas) {
-          captureCanvas = document.createElement("canvas");
-          captureCanvas.width = width;
-          captureCanvas.height = height;
-          captureCanvas.style.position = "fixed";
-          captureCanvas.style.top = "-9999px";
-          captureCanvas.style.left = "-9999px";
-          captureCanvas.style.width = `${width}px`;
-          captureCanvas.style.height = `${height}px`;
-          captureCanvas.style.opacity = "0";
-          captureCanvas.style.pointerEvents = "none";
-          document.body.appendChild(captureCanvas);
-          captureCtx = captureCanvas.getContext("2d", { alpha: false });
-          if (captureCtx) {
-            captureCtx.imageSmoothingEnabled = false;
+        // Try direct sourceCanvas.captureStream(60) first (works reliably with preserveDrawingBuffer: true)
+        const srcCaptureFn =
+          sourceCanvas.captureStream ||
+          (sourceCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
+
+        if (srcCaptureFn) {
+          try {
+            videoStream = srcCaptureFn.call(sourceCanvas, 60);
+          } catch (err) {
+            console.warn("Direct sourceCanvas.captureStream failed, falling back to 2D pump:", err);
           }
         }
 
-        let running = true;
-        const pump = () => {
-          if (!running) return;
-          if (captureCtx && sourceCanvas && sourceCanvas.width > 0 && sourceCanvas.height > 0) {
-            if (captureCanvas && (captureCanvas.width !== sourceCanvas.width || captureCanvas.height !== sourceCanvas.height)) {
-              captureCanvas.width = sourceCanvas.width;
-              captureCanvas.height = sourceCanvas.height;
-              if (captureCtx) captureCtx.imageSmoothingEnabled = false;
+        // Fallback to 2D intermediate capture pump if direct captureStream failed
+        if (!videoStream || videoStream.getVideoTracks().length === 0) {
+          const width = sourceCanvas.width || 320;
+          const height = sourceCanvas.height || 224;
+
+          if (!captureCanvas) {
+            captureCanvas = document.createElement("canvas");
+            captureCanvas.width = width;
+            captureCanvas.height = height;
+            captureCanvas.style.position = "fixed";
+            captureCanvas.style.top = "-9999px";
+            captureCanvas.style.left = "-9999px";
+            captureCanvas.style.width = `${width}px`;
+            captureCanvas.style.height = `${height}px`;
+            captureCanvas.style.opacity = "0";
+            captureCanvas.style.pointerEvents = "none";
+            document.body.appendChild(captureCanvas);
+            captureCtx = captureCanvas.getContext("2d", { alpha: false });
+            if (captureCtx) {
+              captureCtx.imageSmoothingEnabled = false;
             }
-            try {
-              captureCtx.drawImage(sourceCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height);
-            } catch {}
           }
+
+          let running = true;
+          const pump = () => {
+            if (!running) return;
+            if (captureCtx && sourceCanvas && sourceCanvas.width > 0 && sourceCanvas.height > 0) {
+              if (captureCanvas && (captureCanvas.width !== sourceCanvas.width || captureCanvas.height !== sourceCanvas.height)) {
+                captureCanvas.width = sourceCanvas.width;
+                captureCanvas.height = sourceCanvas.height;
+                if (captureCtx) captureCtx.imageSmoothingEnabled = false;
+              }
+              try {
+                captureCtx.drawImage(sourceCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height);
+              } catch {}
+            }
+            animFrameId = requestAnimationFrame(pump);
+          };
           animFrameId = requestAnimationFrame(pump);
-        };
-        animFrameId = requestAnimationFrame(pump);
 
-        const captureFn = captureCanvas.captureStream || (captureCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
-        if (!captureFn) return false;
+          const fallbackCaptureFn =
+            captureCanvas.captureStream ||
+            (captureCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
 
-        const videoStream = captureFn.call(captureCanvas, 60);
+          if (fallbackCaptureFn) {
+            videoStream = fallbackCaptureFn.call(captureCanvas, 60);
+          }
+        }
+
+        if (!videoStream) return false;
         const videoTracks = videoStream.getVideoTracks();
         if (videoTracks.length === 0) return false;
 
@@ -227,8 +399,14 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
         composite.addTrack(videoTracks[0]);
 
         // Capture OpenAL audio from EmulatorJS / Emscripten AL context (Playtime pattern)
-        const AL = (window as unknown as { EJS_emulator?: { Module?: { AL?: unknown } } }).EJS_emulator?.Module?.AL || (window as unknown as { AL?: unknown }).AL;
-        if (AL && (AL as { currentCtx?: { audioCtx?: AudioContext; sources?: Record<string, { gain: AudioNode }> } }).currentCtx?.audioCtx) {
+        const AL =
+          (window as unknown as { EJS_emulator?: { Module?: { AL?: unknown } } }).EJS_emulator?.Module?.AL ||
+          (window as unknown as { AL?: unknown }).AL;
+
+        if (
+          AL &&
+          (AL as { currentCtx?: { audioCtx?: AudioContext; sources?: Record<string, { gain: AudioNode }> } }).currentCtx?.audioCtx
+        ) {
           const alContext = (AL as { currentCtx: { audioCtx: AudioContext; sources: Record<string, { gain: AudioNode }> } }).currentCtx;
           const audioContext = alContext.audioCtx;
           const gainNodes: AudioNode[] = [];
@@ -261,8 +439,14 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
         // Check for late OpenAL audio if not yet captured initially
         if (composite.getAudioTracks().length === 0) {
           audioPollId = setInterval(() => {
-            const curAL = (window as unknown as { EJS_emulator?: { Module?: { AL?: unknown } } }).EJS_emulator?.Module?.AL || (window as unknown as { AL?: unknown }).AL;
-            if (curAL && (curAL as { currentCtx?: { audioCtx?: AudioContext; sources?: Record<string, { gain: AudioNode }> } }).currentCtx?.audioCtx && onAudioTrackAddedRef.current) {
+            const curAL =
+              (window as unknown as { EJS_emulator?: { Module?: { AL?: unknown } } }).EJS_emulator?.Module?.AL ||
+              (window as unknown as { AL?: unknown }).AL;
+            if (
+              curAL &&
+              (curAL as { currentCtx?: { audioCtx?: AudioContext; sources?: Record<string, { gain: AudioNode }> } }).currentCtx?.audioCtx &&
+              onAudioTrackAddedRef.current
+            ) {
               const alCtx = (curAL as { currentCtx: { audioCtx: AudioContext; sources: Record<string, { gain: AudioNode }> } }).currentCtx;
               const gNodes: AudioNode[] = [];
               for (const sIdx in alCtx.sources) {
@@ -338,6 +522,15 @@ export function Emulator({ romUrl, onStreamReady, onAudioTrackAdded }: EmulatorP
       for (const t of pendingTimeouts) clearTimeout(t);
       if (audioPollId) clearInterval(audioPollId);
       if (audioPollTimeoutId) clearTimeout(audioPollTimeoutId);
+
+      // Clean up frame broadcast interval and canvas
+      if (frameBroadcastId) {
+        clearInterval(frameBroadcastId);
+        frameBroadcastId = null;
+      }
+      frameCanvas = null;
+      frameCtx = null;
+      delete (window as unknown as { __onEmulatorAudioChunk?: unknown }).__onEmulatorAudioChunk;
 
       // Remove the loader script tag
       if (document.body.contains(script)) {

@@ -1,19 +1,32 @@
 export const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
     { urls: "stun:stun.cloudflare.com:3478" },
-    {
-      urls: [
-        "turn:openrelay.metered.ca:80",
-        "turn:openrelay.metered.ca:443",
-        "turn:openrelay.metered.ca:443?transport=tcp",
-      ],
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
   ],
-  iceCandidatePoolSize: 0,
+  bundlePolicy: "max-bundle",
+  rtcpMuxPolicy: "require",
+  iceCandidatePoolSize: 2,
 };
+
+export function getStoredPlayerId(code: string): string {
+  const upper = code.toUpperCase();
+  return sessionStorage.getItem(`playerId_${upper}`) || "";
+}
+
+export function getStoredPlayerName(code: string): string {
+  const upper = code.toUpperCase();
+  return sessionStorage.getItem(`playerName_${upper}`) || sessionStorage.getItem("playerName") || "";
+}
+
+export function setStoredPlayerIdentity(code: string, playerId: string, playerName: string): void {
+  const upper = code.toUpperCase();
+  sessionStorage.setItem(`playerId_${upper}`, playerId);
+  sessionStorage.setItem(`playerName_${upper}`, playerName);
+  sessionStorage.setItem("playerId", playerId);
+  sessionStorage.setItem("playerName", playerName);
+}
 
 
 
@@ -62,7 +75,10 @@ export type SignalMessage =
   | { type: "participant-joined"; peerId: string; playerName: string; role: string }
   | { type: "peer-left"; peerId: string; playerName?: string }
   | { type: "error"; message: string }
-  | { type: "no-host" };
+  | { type: "no-host" }
+  | { type: "player-input"; sessionCode: string; input: PlayerInputEvent; fromPeerId?: string }
+  | { type: "video-frame"; sessionCode?: string; frame: string; fromPeerId?: string; timestamp?: number }
+  | { type: "audio-chunk"; sessionCode?: string; pcm: string; sampleRate: number; fromPeerId?: string };
 
 export interface InputEvent {
   type: "keydown" | "keyup";

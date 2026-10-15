@@ -151,3 +151,89 @@ export function buttonLabel(buttonIndex: number): string {
   return names[buttonIndex] ?? `Button ${buttonIndex}`;
 }
 
+// RetroPad button indices used by RetroArch / EmulatorJS
+export const RETROPAD_BUTTON_IDS: Record<string, number> = {
+  b: 0,
+  y: 1,
+  mode: 2,
+  start: 3,
+  up: 4,
+  down: 5,
+  left: 6,
+  right: 7,
+  c: 8,
+  x: 9,
+  a: 10,
+  z: 11,
+};
+
+// Maps Sega Genesis action name to EmulatorJS / RetroPad button index (0..11)
+export const EJS_ACTION_TO_BUTTON_ID: Record<string, number> = {
+  b: 0,
+  a: 1,
+  mode: 2,
+  start: 3,
+  up: 4,
+  down: 5,
+  left: 6,
+  right: 7,
+  c: 8,
+  y: 9,
+  x: 10,
+  z: 11,
+};
+
+/**
+ * Simulates controller input into EmulatorJS directly via the C-core GameManager,
+ * falling back to synthetic KeyboardEvents if the C-core is not ready.
+ * Returns true when direct C-core input succeeded, or false when it fell back to KeyboardEvent.
+ */
+export function simulateEmulatorInput(playerIndex: number, action: string, isDown: boolean): boolean {
+  const port = Math.max(0, Math.min(3, (playerIndex || 1) - 1));
+  const normAction = (action || "").toLowerCase();
+
+  const ejs = (window as unknown as {
+    EJS_emulator?: {
+      gameManager?: {
+        simulateInput?: (player: number, index: number, value: number) => void;
+        functions?: { simulateInput?: (player: number, index: number, value: number) => void };
+      };
+      elements?: { parent?: HTMLElement };
+    };
+  }).EJS_emulator;
+
+  const btnId = EJS_ACTION_TO_BUTTON_ID[normAction];
+  const simFn = ejs?.gameManager?.simulateInput || ejs?.gameManager?.functions?.simulateInput;
+  if (simFn && btnId !== undefined) {
+    try {
+      simFn.call(ejs?.gameManager, port, btnId, isDown ? 1 : 0);
+      return true;
+    } catch {}
+  }
+
+  // Fallback: dispatch KeyboardEvent using player's assigned key mapping
+  const keyAction = getPlayerActionKey(playerIndex, normAction);
+  if (!keyAction) return false;
+
+  const target = ejs?.elements?.parent || document.getElementById("game") || window;
+  const eventType = isDown ? "keydown" : "keyup";
+  const event = new KeyboardEvent(eventType, {
+    key: keyAction.key,
+    code: keyAction.code,
+    keyCode: keyAction.keyCode,
+    which: keyAction.keyCode,
+    bubbles: true,
+    cancelable: true,
+  });
+
+  try {
+    Object.defineProperty(event, "keyCode", { get: () => keyAction.keyCode });
+    Object.defineProperty(event, "which", { get: () => keyAction.keyCode });
+  } catch {}
+
+  target.dispatchEvent(event);
+  return false;
+}
+
+
+

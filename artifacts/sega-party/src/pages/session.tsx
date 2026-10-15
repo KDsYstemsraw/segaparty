@@ -6,12 +6,15 @@ import { getRomUrl, getRomName, setRom, setRomFromUrl } from "@/lib/romStore";
 import {
   getWsUrl,
   RTC_CONFIG,
+  getStoredPlayerId,
+  getStoredPlayerName,
+  setStoredPlayerIdentity,
   type PlayerInputEvent,
   type SlotState,
   type ChatMessage,
   type ParticipantInfo,
 } from "@/lib/webrtc";
-import { getPlayerActionKey } from "@/lib/gamepadMapping";
+import { getPlayerActionKey, simulateEmulatorInput } from "@/lib/gamepadMapping";
 import { useGamepad } from "@/hooks/useGamepad";
 
 import { ControlsModal } from "@/components/ControlsModal";
@@ -67,11 +70,18 @@ export default function SessionPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
-  const [myPlayerId, setMyPlayerId] = useState<string>(() => sessionStorage.getItem("playerId") || "");
-  const [myPlayerName, setMyPlayerName] = useState<string>(() => sessionStorage.getItem("playerName") || "");
+  const [myPlayerId, setMyPlayerId] = useState<string>(() => getStoredPlayerId(code));
+  const [myPlayerName, setMyPlayerName] = useState<string>(() => getStoredPlayerName(code));
   const myPeerId = useRef(crypto.randomUUID());
 
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [hasWsStream, setHasWsStream] = useState(false);
+  const [rtcVideoActive, setRtcVideoActive] = useState(false);
+  const [wsReconnectTick, setWsReconnectTick] = useState(0);
+  const wsImgRef = useRef<HTMLImageElement | null>(null);
+  const nextAudioTimeRef = useRef<number>(0);
+  const rtcVideoActiveRef = useRef(false);
+
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
   const [webrtcStatus, setWebrtcStatus] = useState<{ ice: string; tracks: number; lastSignal: string }>({
     ice: "idle",
@@ -80,6 +90,10 @@ export default function SessionPage() {
   });
   const [isMuted, setIsMuted] = useState(true);
   const [volume, setVolume] = useState(1);
+  const isMutedRef = useRef(isMuted);
+  isMutedRef.current = isMuted;
+  const volumeRef = useRef(volume);
+  volumeRef.current = volume;
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [crtFilter, setCrtFilter] = useState(false);
   const [showTouchGamepad, setShowTouchGamepad] = useState(false);
@@ -142,10 +156,13 @@ export default function SessionPage() {
   })();
 
 
-  // Prompt nickname modal if guest arrived via link without playerId
+  // Prompt nickname modal if guest arrived via link without playerId or with stale playerId
   useEffect(() => {
-    if (!isLoading && session && !myPlayerId) {
-      setJoinPromptOpen(true);
+    if (!isLoading && session) {
+      const isMember = myPlayerId && (session.hostId === myPlayerId || session.players?.some((p) => p.id === myPlayerId));
+      if (!isMember) {
+        setJoinPromptOpen(true);
+      }
     }
   }, [isLoading, session, myPlayerId]);
 
@@ -164,23 +181,26 @@ export default function SessionPage() {
   const handleInputEvent = useCallback(
     (event: PlayerInputEvent) => {
       if (isHost) {
-        // Host dispatches keyboard event to window
-        window.dispatchEvent(
-          new KeyboardEvent(event.type, {
-            key: event.key,
-            keyCode: event.keyCode,
-            code: event.code,
-            bubbles: true,
-          }),
-        );
+        // Direct C-Core simulation (simulateEmulatorInput handles RetroArch joypad or falls back to KeyboardEvent)
+        simulateEmulatorInput(event.playerIndex, event.action, event.type === "keydown");
       } else {
-        // Guest sends over WebRTC Data Channel to Host
+        // Guest sends over WebRTC Data Channel to Host if open
         if (guestDataChannelRef.current?.readyState === "open") {
           guestDataChannelRef.current.send(JSON.stringify(event));
+          return;
+        } else if (wsRef.current?.readyState === WebSocket.OPEN) {
+          // Dual-transport fallback: Send over WebSocket signaling relay only when DataChannel is not open
+          wsRef.current.send(
+            JSON.stringify({
+              type: "player-input",
+              sessionCode: code,
+              input: event,
+            }),
+          );
         }
       }
     },
-    [isHost],
+    [code, isHost],
   );
 
   useGamepad(mySlot, handleInputEvent, handleButtonActivity);
@@ -277,17 +297,7 @@ export default function SessionPage() {
         dc.onmessage = (e) => {
           try {
             const input = JSON.parse(e.data) as PlayerInputEvent;
-            const keyInfo = getPlayerActionKey(input.playerIndex, input.action);
-            if (keyInfo) {
-              window.dispatchEvent(
-                new KeyboardEvent(input.type, {
-                  key: keyInfo.key,
-                  keyCode: keyInfo.keyCode,
-                  code: keyInfo.code,
-                  bubbles: true,
-                }),
-              );
-            }
+            simulateEmulatorInput(input.playerIndex, input.action, input.type === "keydown");
           } catch {}
         };
 
@@ -471,6 +481,7 @@ export default function SessionPage() {
   useEffect(() => {
     if (!session || !myPlayerName) return;
 
+    let unmounted = false;
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
     setConnectionStatus("connecting");
@@ -549,9 +560,81 @@ export default function SessionPage() {
           setConnectionStatus("connecting");
         }
 
+        if (msg.type === "player-input" && isHost && msg.input) {
+          const input = msg.input as PlayerInputEvent;
+          simulateEmulatorInput(input.playerIndex, input.action, input.type === "keydown");
+        }
+
+        if (msg.type === "video-frame" && !isHost) {
+          if (wsImgRef.current) {
+            wsImgRef.current.src = msg.frame as string;
+          }
+          setHasWsStream((prev) => (prev ? prev : true));
+          setConnectionStatus("connected");
+          setWebrtcStatus((prev) => ({ ...prev, lastSignal: "WS Live Stream" }));
+        }
+
+        if (msg.type === "audio-chunk" && !isHost) {
+          const isRtcAudioPlaying = rtcVideoActiveRef.current && !!remoteStream && remoteStream.getAudioTracks().some((t) => t.readyState === "live" && !t.muted);
+          if (!isMutedRef.current && !isRtcAudioPlaying) {
+            try {
+              const pcmBase64 = msg.pcm as string;
+              const sampleRate = (msg.sampleRate as number) || 22050;
+              if (pcmBase64) {
+                const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+                if (AudioCtxClass) {
+                  if (!guestAudioCtxRef.current) {
+                    guestAudioCtxRef.current = new AudioCtxClass();
+                  }
+                  const ctx = guestAudioCtxRef.current;
+                  if (ctx.state === "suspended") {
+                    ctx.resume().catch(() => {});
+                  }
+
+                  const binaryString = atob(pcmBase64);
+                  const len = binaryString.length;
+                  const bytes = new Uint8Array(len);
+                  for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                  }
+                  const int16Array = new Int16Array(bytes.buffer);
+                  const numSamples = int16Array.length;
+
+                  if (numSamples > 0) {
+                    const audioBuffer = ctx.createBuffer(1, numSamples, sampleRate);
+                    const channelData = audioBuffer.getChannelData(0);
+                    for (let i = 0; i < numSamples; i++) {
+                      channelData[i] = int16Array[i] / 32768.0;
+                    }
+
+                    const bufferSource = ctx.createBufferSource();
+                    bufferSource.buffer = audioBuffer;
+
+                    if (!guestGainNodeRef.current) {
+                      const gain = ctx.createGain();
+                      gain.gain.value = isMutedRef.current ? 0 : volumeRef.current;
+                      gain.connect(ctx.destination);
+                      guestGainNodeRef.current = gain;
+                    }
+
+                    bufferSource.connect(guestGainNodeRef.current || ctx.destination);
+
+                    const startTime = Math.max(ctx.currentTime, nextAudioTimeRef.current);
+                    bufferSource.start(startTime);
+                    nextAudioTimeRef.current = startTime + audioBuffer.duration;
+                  }
+                }
+              }
+            } catch {}
+          }
+        }
+
         if (msg.type === "no-host" && !isHost) {
           hostPeerIdRef.current = null;
           setRemoteStream(null);
+          setHasWsStream(false);
+          setRtcVideoActive(false);
+          rtcVideoActiveRef.current = false;
           setConnectionStatus("error");
           toast({
             title: "Host not online",
@@ -597,6 +680,9 @@ export default function SessionPage() {
             hostPeerIdRef.current = null;
             guestDataChannelRef.current = null;
             setRemoteStream(null);
+            setHasWsStream(false);
+            setRtcVideoActive(false);
+            rtcVideoActiveRef.current = false;
             setConnectionStatus("idle");
           }
         }
@@ -605,7 +691,16 @@ export default function SessionPage() {
 
     ws.onerror = () => setConnectionStatus("error");
 
+    ws.onclose = () => {
+      if (!unmounted) {
+        setTimeout(() => {
+          if (!unmounted) setWsReconnectTick((t) => t + 1);
+        }, 2000);
+      }
+    };
+
     return () => {
+      unmounted = true;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "leave", sessionCode: code, peerId: myPeerId.current }));
       }
@@ -616,7 +711,7 @@ export default function SessionPage() {
       dataChannelsRef.current.clear();
       iceCandidateQueueRef.current.clear();
     };
-  }, [code, isHost, myPlayerName, session?.code, createHostOffer, handleSignal, toast]);
+  }, [code, isHost, myPlayerName, session?.code, wsReconnectTick, createHostOffer, handleSignal, toast]);
 
   // Bind remote stream to HTML5 video element with auto-recovery and onunmute handler
   useEffect(() => {
@@ -688,6 +783,47 @@ export default function SessionPage() {
       });
     }
   }, [sendSignal]);
+
+  // Host dual-transport video frame broadcasting over WebSocket for instant guest view
+  const handleVideoFrame = useCallback(
+    (dataUrl: string) => {
+      if (
+        isHost &&
+        wsRef.current?.readyState === WebSocket.OPEN &&
+        (participantsRef.current.length > 1 || peerConnsRef.current.size > 0)
+      ) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "video-frame",
+            sessionCode: code,
+            frame: dataUrl,
+          }),
+        );
+      }
+    },
+    [code, isHost],
+  );
+
+  // Host dual-transport audio chunk broadcasting over WebSocket for instant guest sound
+  const handleAudioChunk = useCallback(
+    (pcmBase64: string, sampleRate: number) => {
+      if (
+        isHost &&
+        wsRef.current?.readyState === WebSocket.OPEN &&
+        (participantsRef.current.length > 1 || peerConnsRef.current.size > 0)
+      ) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "audio-chunk",
+            sessionCode: code,
+            pcm: pcmBase64,
+            sampleRate,
+          }),
+        );
+      }
+    },
+    [code, isHost],
+  );
 
   // Claim Controller Slot
   const handleClaimSlot = useCallback(
@@ -789,7 +925,11 @@ export default function SessionPage() {
       "-": "mode",
     };
 
-    const actionMap = mySlot === 2 ? KEY_ACTIONS_P2 : KEY_ACTIONS_P1;
+    const actionMap = !isHost
+      ? { ...KEY_ACTIONS_P2, ...KEY_ACTIONS_P1 }
+      : mySlot === 2
+      ? KEY_ACTIONS_P2
+      : KEY_ACTIONS_P1;
 
     const forwardKey = (e: KeyboardEvent, type: "keydown" | "keyup") => {
       // Ignore synthetic events dispatched by handleInputEvent to prevent infinite loop
@@ -831,27 +971,21 @@ export default function SessionPage() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [mySlot, handleInputEvent, handleButtonActivity]);
+  }, [mySlot, isHost, handleInputEvent, handleButtonActivity]);
 
 
   const handleLoadRomFile = async (file: File) => {
     const url = await setRom(file);
     const title = cleanRomTitle(file.name);
+    gameStreamRef.current = null;
     setCurrentRomUrl(url);
     setActiveRomName(title);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({
-          type: "rom-info",
+          type: "rom-change",
           sessionCode: code,
           romName: title,
-        }),
-      );
-      wsRef.current.send(
-        JSON.stringify({
-          type: "chat",
-          sessionCode: code,
-          text: `🎮 Host loaded ROM: ${title}`,
         }),
       );
     }
@@ -873,8 +1007,7 @@ export default function SessionPage() {
       { code, data: { playerName: name } },
       {
         onSuccess: (resp) => {
-          sessionStorage.setItem("playerId", resp.playerId);
-          sessionStorage.setItem("playerName", name);
+          setStoredPlayerIdentity(code, resp.playerId, name);
           setMyPlayerId(resp.playerId);
           setMyPlayerName(name);
           setJoinPromptOpen(false);
@@ -893,6 +1026,7 @@ export default function SessionPage() {
 
   const unlockAudio = () => {
     setIsMuted(false);
+    isMutedRef.current = false;
     setAudioBlocked(false);
     if (videoRef.current) {
       videoRef.current.muted = false;
@@ -1033,6 +1167,8 @@ export default function SessionPage() {
                   romUrl={romUrl}
                   onStreamReady={handleStreamReady}
                   onAudioTrackAdded={handleAudioTrackAdded}
+                  onVideoFrame={handleVideoFrame}
+                  onAudioChunk={handleAudioChunk}
                 />
               ) : (
                 <div className="w-full aspect-video bg-black border-4 border-destructive/50 rounded-lg flex flex-col items-center justify-center p-6 text-center space-y-3">
@@ -1053,8 +1189,16 @@ export default function SessionPage() {
                 }}
                 className="w-full aspect-[4/3] max-w-4xl mx-auto bg-black border-4 border-primary rounded-lg shadow-[0_0_30px_rgba(0,71,187,0.4)] relative overflow-hidden group flex items-center justify-center cursor-pointer"
               >
-                {remoteStream ? (
+                {(remoteStream || hasWsStream) ? (
                   <>
+                    {/* WebSocket Fallback Live Image Stream */}
+                    <img
+                      ref={wsImgRef}
+                      alt="Game Stream"
+                      className={`w-full h-full object-contain absolute inset-0 z-0 ${hasWsStream ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+                    />
+
+                    {/* WebRTC Video Stream - transparent until decoding active frames */}
                     <video
                       ref={(el) => {
                         videoRef.current = el;
@@ -1063,7 +1207,21 @@ export default function SessionPage() {
                           el.play().catch(() => {});
                         }
                       }}
-                      className="w-full h-full object-contain"
+                      onTimeUpdate={(e) => {
+                        if (e.currentTarget.videoWidth > 0 && e.currentTarget.currentTime > 0) {
+                          setRtcVideoActive(true);
+                          rtcVideoActiveRef.current = true;
+                        }
+                      }}
+                      onPlaying={(e) => {
+                        if (e.currentTarget.videoWidth > 0) {
+                          setRtcVideoActive(true);
+                          rtcVideoActiveRef.current = true;
+                        }
+                      }}
+                      className={`w-full h-full object-contain relative z-[5] ${
+                        rtcVideoActive ? "opacity-100" : "opacity-0 pointer-events-none"
+                      }`}
                       autoPlay
                       playsInline
                       muted
@@ -1095,7 +1253,14 @@ export default function SessionPage() {
                       <Button
                         size="icon"
                         variant="ghost"
-                        onClick={() => setIsMuted(!isMuted)}
+                        onClick={() => {
+                          const next = !isMuted;
+                          setIsMuted(next);
+                          isMutedRef.current = next;
+                          if (!next) {
+                            unlockAudio();
+                          }
+                        }}
                         className="w-7 h-7 text-muted-foreground hover:text-foreground"
                         title={isMuted ? "Unmute Game Audio" : "Mute Game Audio"}
                       >

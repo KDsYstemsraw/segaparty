@@ -97,9 +97,20 @@ export function attachSignalingServer(server: Server) {
 
         if (role === "host") {
           room.hostPeerId = peerId;
-          // Auto-assign host to Slot 1 if empty
+          // Auto-assign host to Slot 1 if empty or update peerId if host reconnected
           if (!room.slots[1]) {
             room.slots[1] = { peerId, playerName, isHost: true };
+          } else if (room.slots[1].isHost || room.slots[1].playerName === playerName) {
+            room.slots[1].peerId = peerId;
+          }
+        } else if (role === "guest") {
+          const hasSlot = Object.values(room.slots).some((s) => s?.peerId === peerId);
+          if (!hasSlot) {
+            const guestSlots = [2, 3, 4, 1];
+            const freeSlot = guestSlots.find((s) => !room.slots[s]);
+            if (freeSlot !== undefined) {
+              room.slots[freeSlot] = { peerId, playerName, isHost: false };
+            }
           }
         }
 
@@ -365,7 +376,7 @@ export function attachSignalingServer(server: Server) {
         return;
       }
 
-      if (type === "rom-change") {
+      if (type === "rom-change" || type === "rom-info") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
         const romName = msg.romName as string;
         if (!sessionCode || !romName || myPeerId !== rooms.get(sessionCode)?.hostPeerId) return;
@@ -389,6 +400,70 @@ export function attachSignalingServer(server: Server) {
           timestamp: Date.now(),
           isSystem: true,
         });
+        return;
+      }
+
+      if (type === "player-input") {
+        const sessionCode = (msg.sessionCode as string)?.toUpperCase();
+        const input = msg.input;
+        if (!sessionCode) return;
+
+        const room = rooms.get(sessionCode);
+        if (!room || !room.hostPeerId) return;
+
+        const hostPeer = room.peers.get(room.hostPeerId);
+        if (hostPeer && hostPeer.ws.readyState === WebSocket.OPEN) {
+          hostPeer.ws.send(
+            JSON.stringify({
+              type: "player-input",
+              fromPeerId: myPeerId,
+              input,
+            }),
+          );
+        }
+        return;
+      }
+
+      if (type === "video-frame") {
+        const sessionCode = (msg.sessionCode as string)?.toUpperCase();
+        const frame = msg.frame as string;
+        if (!sessionCode) return;
+
+        const room = rooms.get(sessionCode);
+        if (!room || !frame) return;
+
+        broadcastToRoom(
+          room,
+          {
+            type: "video-frame",
+            fromPeerId: myPeerId,
+            frame,
+            timestamp: (msg.timestamp as number) || Date.now(),
+          },
+          myPeerId || undefined,
+        );
+        return;
+      }
+
+      if (type === "audio-chunk") {
+        const sessionCode = (msg.sessionCode as string)?.toUpperCase();
+        const pcm = msg.pcm as string;
+        const sampleRate = msg.sampleRate as number;
+        if (!sessionCode) return;
+
+        const room = rooms.get(sessionCode);
+        if (!room || !pcm) return;
+
+        broadcastToRoom(
+          room,
+          {
+            type: "audio-chunk",
+            fromPeerId: myPeerId,
+            pcm,
+            sampleRate: sampleRate || 22050,
+          },
+          myPeerId || undefined,
+        );
         return;
       }
 

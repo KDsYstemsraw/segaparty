@@ -12,6 +12,7 @@ import { setRom, setRomFromUrl } from "@/lib/romStore";
 import { SAMPLE_ROMS, type SampleRom } from "@/lib/sampleRoms";
 import { RomFilePicker } from "@/components/RomFilePicker";
 import { cleanRomTitle } from "@/lib/romUtils";
+import { setStoredPlayerIdentity } from "@/lib/webrtc";
 
 const RETRO_NAMES = [
   "Sonic_99",
@@ -69,8 +70,7 @@ export default function Home() {
       { data: { hostName: hostName.trim() } },
       {
         onSuccess: (session) => {
-          sessionStorage.setItem("playerName", hostName.trim());
-          sessionStorage.setItem("playerId", session.hostId);
+          setStoredPlayerIdentity(session.code, session.hostId, hostName.trim());
           setLocation(`/session/${session.code}`);
         },
         onError: () => {
@@ -92,8 +92,7 @@ export default function Home() {
       { code: cleanCode, data: { playerName: joinName.trim() } },
       {
         onSuccess: (response) => {
-          sessionStorage.setItem("playerName", joinName.trim());
-          sessionStorage.setItem("playerId", response.playerId);
+          setStoredPlayerIdentity(response.session.code, response.playerId, joinName.trim());
           setLocation(`/session/${response.session.code}`);
         },
         onError: () => {
