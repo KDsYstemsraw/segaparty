@@ -1,10 +1,16 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Gamepad2,
   Keyboard,
+  Mouse,
   RotateCcw,
   Circle,
   Wand2,
@@ -13,12 +19,9 @@ import {
   Sparkles,
   Zap,
   Radio,
-  ArrowUp,
-  ArrowDown,
-  ArrowLeft,
-  ArrowRight,
   Sliders,
-  Check,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import {
   DEFAULT_MAPPING,
@@ -44,12 +47,156 @@ export interface ControlsModalProps {
   activeCore?: string;
   playerSlot?: number;
   isHost?: boolean;
+  onTestInput?: (action: string, isDown: boolean) => void;
 }
 
-interface ActionInfo {
+export interface ConsoleActionInfo {
   id: string;
   label: string;
   shortLabel?: string;
+}
+
+export function mouseButtonToToken(button: number): string {
+  return `Mouse${button}`;
+}
+
+export function isMouseBinding(key?: string): boolean {
+  return Boolean(key && key.startsWith("Mouse"));
+}
+
+export function formatBindingLabel(key?: string): string {
+  if (!key) return "—";
+  if (key === "Mouse0") return "🖱️ Left Click";
+  if (key === "Mouse1") return "🖱️ Middle Click";
+  if (key === "Mouse2") return "🖱️ Right Click";
+  if (key === "Mouse3") return "🖱️ Mouse Back (M4)";
+  if (key === "Mouse4") return "🖱️ Mouse Fwd (M5)";
+  if (key.startsWith("Mouse")) return `🖱️ ${key}`;
+  return formatKeyLabel(key);
+}
+
+export function getConsoleControllerTitle(coreId?: string): string {
+  const norm = (coreId || "segaMD").toLowerCase();
+  if (norm === "n64") return "Nintendo 64 Trident Controller (Analog + C-Buttons)";
+  if (norm === "psx") return "PlayStation DualShock / Classic Controller (△ □ ○ ✕)";
+  if (norm === "snes") return "Super Nintendo 4-Button Diamond Controller (A B X Y)";
+  if (norm === "gba") return "Game Boy Advance Handheld (D-Pad, A, B, L, R)";
+  if (norm === "gb" || norm === "gbc") return "Game Boy Handheld (D-Pad, A, B, Start, Select)";
+  if (norm === "nes") return "NES 2-Button Rectangular Controller (A, B)";
+  if (norm === "segaMS") return "Sega Master System Control Pad (1 & 2 Buttons)";
+  if (norm === "segaGG") return "Sega Game Gear Handheld (1 & 2 Buttons)";
+  if (norm === "atari2600") return "Atari 2600 Joystick (1 Fire Button + Stick)";
+  return "Sega Genesis 6-Button Arcade Pad (A/B/C + X/Y/Z)";
+}
+
+export function getConsoleActions(coreId?: string): ConsoleActionInfo[] {
+  const normCore = (coreId || "segaMD").toLowerCase();
+
+  const dpad: ConsoleActionInfo[] = [
+    { id: "up", label: "D-Pad Up", shortLabel: "▲" },
+    { id: "down", label: "D-Pad Down", shortLabel: "▼" },
+    { id: "left", label: "D-Pad Left", shortLabel: "◀" },
+    { id: "right", label: "D-Pad Right", shortLabel: "▶" },
+  ];
+
+  if (normCore === "n64") {
+    return [
+      ...dpad,
+      { id: "a", label: "A Button", shortLabel: "A" },
+      { id: "b", label: "B Button", shortLabel: "B" },
+      { id: "z", label: "Z Trigger", shortLabel: "Z" },
+      { id: "l", label: "L Shoulder", shortLabel: "L" },
+      { id: "r", label: "R Shoulder", shortLabel: "R" },
+      { id: "c-up", label: "C-Up", shortLabel: "C▲" },
+      { id: "c-down", label: "C-Down", shortLabel: "C▼" },
+      { id: "c-left", label: "C-Left", shortLabel: "C◀" },
+      { id: "c-right", label: "C-Right", shortLabel: "C▶" },
+      { id: "start", label: "Start", shortLabel: "STA" },
+    ];
+  }
+
+  if (normCore === "psx") {
+    return [
+      ...dpad,
+      { id: "b", label: "Cross (✕)", shortLabel: "✕" },
+      { id: "y", label: "Square (□)", shortLabel: "□" },
+      { id: "a", label: "Circle (○)", shortLabel: "○" },
+      { id: "x", label: "Triangle (△)", shortLabel: "△" },
+      { id: "l1", label: "L1 Trigger", shortLabel: "L1" },
+      { id: "r1", label: "R1 Trigger", shortLabel: "R1" },
+      { id: "l2", label: "L2 Trigger", shortLabel: "L2" },
+      { id: "r2", label: "R2 Trigger", shortLabel: "R2" },
+      { id: "mode", label: "Select", shortLabel: "SEL" },
+      { id: "start", label: "Start", shortLabel: "STA" },
+    ];
+  }
+
+  if (normCore === "snes") {
+    return [
+      ...dpad,
+      { id: "b", label: "B Button", shortLabel: "B" },
+      { id: "a", label: "A Button", shortLabel: "A" },
+      { id: "y", label: "Y Button", shortLabel: "Y" },
+      { id: "x", label: "X Button", shortLabel: "X" },
+      { id: "l", label: "L Shoulder", shortLabel: "L" },
+      { id: "r", label: "R Shoulder", shortLabel: "R" },
+      { id: "mode", label: "Select", shortLabel: "SEL" },
+      { id: "start", label: "Start", shortLabel: "STA" },
+    ];
+  }
+
+  if (normCore === "gba") {
+    return [
+      ...dpad,
+      { id: "b", label: "B Button", shortLabel: "B" },
+      { id: "a", label: "A Button", shortLabel: "A" },
+      { id: "l", label: "L Shoulder", shortLabel: "L" },
+      { id: "r", label: "R Shoulder", shortLabel: "R" },
+      { id: "mode", label: "Select", shortLabel: "SEL" },
+      { id: "start", label: "Start", shortLabel: "STA" },
+    ];
+  }
+
+  if (normCore === "gb" || normCore === "gbc" || normCore === "nes") {
+    return [
+      ...dpad,
+      { id: "b", label: "B Button", shortLabel: "B" },
+      { id: "a", label: "A Button", shortLabel: "A" },
+      { id: "mode", label: "Select", shortLabel: "SEL" },
+      { id: "start", label: "Start", shortLabel: "STA" },
+    ];
+  }
+
+  if (normCore === "segaMS" || normCore === "segaGG") {
+    return [
+      ...dpad,
+      { id: "1", label: "1 Button (Start)", shortLabel: "1" },
+      { id: "2", label: "2 Button", shortLabel: "2" },
+      { id: "start", label: "Start", shortLabel: "STA" },
+    ];
+  }
+
+  if (normCore === "atari2600") {
+    return [
+      ...dpad,
+      { id: "a", label: "Fire Button", shortLabel: "FIRE" },
+      { id: "start", label: "Reset / Start", shortLabel: "STA" },
+      { id: "mode", label: "Select", shortLabel: "SEL" },
+    ];
+  }
+
+  // Default: Sega Genesis / Mega Drive (6-button)
+  return [
+    ...dpad,
+    { id: "a", label: "A Button", shortLabel: "A" },
+    { id: "b", label: "B Button", shortLabel: "B" },
+    { id: "c", label: "C Button", shortLabel: "C" },
+    { id: "x", label: "X Button", shortLabel: "X" },
+    { id: "y", label: "Y Button", shortLabel: "Y" },
+    { id: "z", label: "Z Button", shortLabel: "Z" },
+    { id: "start", label: "Start", shortLabel: "STA" },
+    { id: "mode", label: "Mode", shortLabel: "MOD" },
+  ];
 }
 
 const NUMPAD_KEYBOARD_MAPPING: KeyboardMapping = {
@@ -94,96 +241,15 @@ function playBeep() {
   } catch {}
 }
 
-function getConsoleActions(coreId: string): ActionInfo[] {
-  const normCore = (coreId || "segaMD").toLowerCase();
-
-  const dpad: ActionInfo[] = [
-    { id: "up", label: "D-Pad Up", shortLabel: "▲" },
-    { id: "down", label: "D-Pad Down", shortLabel: "▼" },
-    { id: "left", label: "D-Pad Left", shortLabel: "◀" },
-    { id: "right", label: "D-Pad Right", shortLabel: "▶" },
-  ];
-
-  if (normCore === "psx") {
-    return [
-      ...dpad,
-      { id: "b", label: "Cross (✕)", shortLabel: "✕" },
-      { id: "y", label: "Square (□)", shortLabel: "□" },
-      { id: "a", label: "Circle (○)", shortLabel: "○" },
-      { id: "x", label: "Triangle (△)", shortLabel: "△" },
-      { id: "l1", label: "L1 Trigger", shortLabel: "L1" },
-      { id: "r1", label: "R1 Trigger", shortLabel: "R1" },
-      { id: "l2", label: "L2 Trigger", shortLabel: "L2" },
-      { id: "r2", label: "R2 Trigger", shortLabel: "R2" },
-      { id: "mode", label: "Select", shortLabel: "SEL" },
-      { id: "start", label: "Start", shortLabel: "STA" },
-    ];
-  }
-
-  if (normCore === "snes") {
-    return [
-      ...dpad,
-      { id: "b", label: "B Button", shortLabel: "B" },
-      { id: "a", label: "A Button", shortLabel: "A" },
-      { id: "y", label: "Y Button", shortLabel: "Y" },
-      { id: "x", label: "X Button", shortLabel: "X" },
-      { id: "l", label: "L Shoulder", shortLabel: "L" },
-      { id: "r", label: "R Shoulder", shortLabel: "R" },
-      { id: "mode", label: "Select", shortLabel: "SEL" },
-      { id: "start", label: "Start", shortLabel: "STA" },
-    ];
-  }
-
-  if (normCore === "gba" || normCore === "gb" || normCore === "nes") {
-    return [
-      ...dpad,
-      { id: "b", label: "B Button", shortLabel: "B" },
-      { id: "a", label: "A Button", shortLabel: "A" },
-      { id: "l", label: "L Shoulder", shortLabel: "L" },
-      { id: "r", label: "R Shoulder", shortLabel: "R" },
-      { id: "mode", label: "Select", shortLabel: "SEL" },
-      { id: "start", label: "Start", shortLabel: "STA" },
-    ];
-  }
-
-  if (normCore === "n64") {
-    return [
-      ...dpad,
-      { id: "a", label: "A Button", shortLabel: "A" },
-      { id: "b", label: "B Button", shortLabel: "B" },
-      { id: "z", label: "Z Trigger", shortLabel: "Z" },
-      { id: "l", label: "L Button", shortLabel: "L" },
-      { id: "r", label: "R Button", shortLabel: "R" },
-      { id: "c-up", label: "C-Up", shortLabel: "C▲" },
-      { id: "c-down", label: "C-Down", shortLabel: "C▼" },
-      { id: "c-left", label: "C-Left", shortLabel: "C◀" },
-      { id: "c-right", label: "C-Right", shortLabel: "C▶" },
-      { id: "start", label: "Start", shortLabel: "STA" },
-    ];
-  }
-
-  // Default: Sega Genesis / Mega Drive (6-button)
-  return [
-    ...dpad,
-    { id: "a", label: "A Button", shortLabel: "A" },
-    { id: "b", label: "B Button", shortLabel: "B" },
-    { id: "c", label: "C Button", shortLabel: "C" },
-    { id: "x", label: "X Button", shortLabel: "X" },
-    { id: "y", label: "Y Button", shortLabel: "Y" },
-    { id: "z", label: "Z Button", shortLabel: "Z" },
-    { id: "start", label: "Start", shortLabel: "STA" },
-    { id: "mode", label: "Mode", shortLabel: "MOD" },
-  ];
-}
-
 export function ControlsModal({
   open,
   onClose,
   activeCore = "segaMD",
   playerSlot = 1,
   isHost = true,
+  onTestInput,
 }: ControlsModalProps) {
-  // Selected slot state
+  // Selected slot state (1 to 4)
   const [selectedSlot, setSelectedSlot] = useState<number>(() =>
     Math.max(1, Math.min(4, playerSlot || 1)),
   );
@@ -194,9 +260,8 @@ export function ControlsModal({
     loadPlayerKeyboardMapping(selectedSlot),
   );
 
-  // Rebinding state
-  const [listeningFor, setListeningFor] = useState<string | null>(null);
-  const [listeningKeyFor, setListeningKeyFor] = useState<string | null>(null);
+  // Unified single-button rebinding action ID
+  const [listeningActionId, setListeningActionId] = useState<string | null>(null);
 
   // Connected gamepad diagnostic
   const [connectedPad, setConnectedPad] = useState<string | null>(null);
@@ -205,15 +270,19 @@ export function ControlsModal({
   // Sequential Wizard Engine state
   const [isWizardActive, setIsWizardActive] = useState(false);
   const [wizardStepIndex, setWizardStepIndex] = useState(0);
-  const [wizardDevice, setWizardDevice] = useState<"keyboard" | "gamepad">("keyboard");
   const [wizardCompleted, setWizardCompleted] = useState(false);
   const [wizardJustMapped, setWizardJustMapped] = useState<string | null>(null);
 
   // Toast / feedback message on preset apply
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Live test pressed actions tracking
+  // Live test pressed actions tracking (state for UI re-renders)
   const [activeTestActions, setActiveTestActions] = useState<Set<string>>(new Set());
+
+  // Input tracking refs for bug-free light up and in-game forwarding
+  const kbMouseHeldRef = useRef<Set<string>>(new Set());
+  const padHeldRef = useRef<Set<string>>(new Set());
+  const activeTestActionsRef = useRef<Set<string>>(new Set());
 
   const listenTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rafRef = useRef<number>(0);
@@ -223,6 +292,43 @@ export function ControlsModal({
   const consoleSys = getConsoleSystem(activeCore);
   const actions = getConsoleActions(activeCore);
   const currentWizardAction = actions[wizardStepIndex] || actions[0];
+
+  // Helper to sync union of keyboard, mouse, and gamepad held actions, updating state and forwarding in-game
+  const syncActiveTestActions = useCallback(() => {
+    const union = new Set<string>();
+    for (const a of kbMouseHeldRef.current) union.add(a);
+    for (const a of padHeldRef.current) union.add(a);
+
+    const prev = activeTestActionsRef.current;
+
+    // Newly pressed actions
+    for (const a of union) {
+      if (!prev.has(a)) {
+        onTestInput?.(a, true);
+      }
+    }
+
+    // Released actions
+    for (const a of prev) {
+      if (!union.has(a)) {
+        onTestInput?.(a, false);
+      }
+    }
+
+    activeTestActionsRef.current = union;
+    setActiveTestActions(new Set(union));
+  }, [onTestInput]);
+
+  // Clean release of all inputs
+  const releaseAllInputs = useCallback(() => {
+    for (const a of activeTestActionsRef.current) {
+      onTestInput?.(a, false);
+    }
+    kbMouseHeldRef.current.clear();
+    padHeldRef.current.clear();
+    activeTestActionsRef.current.clear();
+    setActiveTestActions(new Set());
+  }, [onTestInput]);
 
   // Sync selectedSlot when playerSlot prop changes
   useEffect(() => {
@@ -238,11 +344,46 @@ export function ControlsModal({
       setKbMapping(loadPlayerKeyboardMapping(selectedSlot));
       setIsWizardActive(false);
       setWizardCompleted(false);
-      setListeningFor(null);
-      setListeningKeyFor(null);
-      setActiveTestActions(new Set());
+      setListeningActionId(null);
+      releaseAllInputs();
+    } else {
+      releaseAllInputs();
     }
-  }, [selectedSlot, open]);
+  }, [selectedSlot, open, releaseAllInputs]);
+
+  // Release all inputs on window blur
+  useEffect(() => {
+    if (!open) return;
+    const handleBlur = () => {
+      releaseAllInputs();
+    };
+    window.addEventListener("blur", handleBlur);
+    return () => {
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [open, releaseAllInputs]);
+
+  // Global mouseup listener to release held mouse test actions
+  useEffect(() => {
+    if (!open) return;
+    const handleGlobalMouseUp = (e: MouseEvent) => {
+      const token = mouseButtonToToken(e.button);
+      let changed = false;
+      for (const [actionId, boundKey] of Object.entries(kbMapping)) {
+        if (boundKey === token && kbMouseHeldRef.current.has(actionId)) {
+          kbMouseHeldRef.current.delete(actionId);
+          changed = true;
+        }
+      }
+      if (changed) {
+        syncActiveTestActions();
+      }
+    };
+    window.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => {
+      window.removeEventListener("mouseup", handleGlobalMouseUp);
+    };
+  }, [open, kbMapping, syncActiveTestActions]);
 
   // Detect connected gamepad
   useEffect(() => {
@@ -276,13 +417,84 @@ export function ControlsModal({
     return buttonLabel(Number(key));
   };
 
-  // Keyboard Event Engine: Handles Wizard, Single-key rebinding, and Live Virtual Joypad Glow
+  // Mouse binding handler: works for both the active Wizard and single-button rebinding
+  const handleMouseBinding = (buttonIndex: number, targetActionId?: string) => {
+    const actionToBind = targetActionId || (isWizardActive ? currentWizardAction?.id : null);
+    if (!actionToBind) return;
+
+    const token = mouseButtonToToken(buttonIndex);
+    playBeep();
+    setLastLiveInput(`Mouse: ${formatBindingLabel(token)}`);
+
+    const updated = assignKeyboardBinding(kbMapping, actionToBind, token);
+    setKbMapping(updated);
+    savePlayerKeyboardMapping(selectedSlot, updated);
+
+    if (isWizardActive) {
+      setWizardJustMapped(formatBindingLabel(token));
+      if (wizardStepIndex + 1 < actions.length) {
+        setWizardStepIndex((prev) => prev + 1);
+      } else {
+        setIsWizardActive(false);
+        setWizardCompleted(true);
+      }
+    }
+
+    if (listeningActionId) {
+      setListeningActionId(null);
+      if (listenTimeout.current) clearTimeout(listenTimeout.current);
+    }
+  };
+
+  // Mouse live testing handlers
+  const handleMouseTestDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const token = mouseButtonToToken(e.button);
+    setLastLiveInput(`Mouse: ${formatBindingLabel(token)}`);
+    let changed = false;
+
+    for (const [actionId, boundKey] of Object.entries(kbMapping)) {
+      if (boundKey === token) {
+        if (!kbMouseHeldRef.current.has(actionId)) {
+          kbMouseHeldRef.current.add(actionId);
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      syncActiveTestActions();
+    }
+  };
+
+  const handleMouseTestUp = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const token = mouseButtonToToken(e.button);
+    let changed = false;
+
+    for (const [actionId, boundKey] of Object.entries(kbMapping)) {
+      if (boundKey === token) {
+        if (kbMouseHeldRef.current.has(actionId)) {
+          kbMouseHeldRef.current.delete(actionId);
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      syncActiveTestActions();
+    }
+  };
+
+  // Keyboard Event Engine: Handles Wizard, Single-button rebinding, and Live Virtual Joypad Glow
   useEffect(() => {
     if (!open) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 1. Wizard Keyboard Step Capture
-      if (isWizardActive && wizardDevice === "keyboard") {
+      // 1. Wizard Key Capture
+      if (isWizardActive) {
         e.preventDefault();
         e.stopPropagation();
 
@@ -295,8 +507,8 @@ export function ControlsModal({
 
         const newKey = e.key;
         playBeep();
-        setLastLiveInput(`Key: ${formatKeyLabel(newKey)}`);
-        setWizardJustMapped(formatKeyLabel(newKey));
+        setLastLiveInput(`Key: ${formatBindingLabel(newKey)}`);
+        setWizardJustMapped(formatBindingLabel(newKey));
 
         const updated = assignKeyboardBinding(kbMapping, currentWizardAction.id, newKey);
         setKbMapping(updated);
@@ -311,62 +523,63 @@ export function ControlsModal({
         return;
       }
 
-      // 2. Manual Single-Key Rebinding
-      if (listeningKeyFor) {
+      // 2. Manual Single-Action Rebinding
+      if (listeningActionId) {
         e.preventDefault();
         e.stopPropagation();
 
         if (e.key === "Escape") {
-          setListeningKeyFor(null);
+          setListeningActionId(null);
           return;
         }
 
         const newKey = e.key;
         playBeep();
-        setLastLiveInput(`Key: ${formatKeyLabel(newKey)}`);
-        const updated = assignKeyboardBinding(kbMapping, listeningKeyFor, newKey);
+        setLastLiveInput(`Key: ${formatBindingLabel(newKey)}`);
+        const updated = assignKeyboardBinding(kbMapping, listeningActionId, newKey);
         setKbMapping(updated);
         savePlayerKeyboardMapping(selectedSlot, updated);
-        setListeningKeyFor(null);
+        setListeningActionId(null);
+        if (listenTimeout.current) clearTimeout(listenTimeout.current);
         return;
       }
 
-      // 3. Passive Live Testing: Match key to actions and light up buttons!
+      // 3. Passive Live Testing
       if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
-        setLastLiveInput(`Key: ${formatKeyLabel(e.key)}`);
+        setLastLiveInput(`Key: ${formatBindingLabel(e.key)}`);
         const lowerKey = e.key.toLowerCase();
-        const matchedActions: string[] = [];
+        let changed = false;
+
         for (const [actionId, boundKey] of Object.entries(kbMapping)) {
           if (boundKey && boundKey.toLowerCase() === lowerKey) {
-            matchedActions.push(actionId);
+            if (!kbMouseHeldRef.current.has(actionId)) {
+              kbMouseHeldRef.current.add(actionId);
+              changed = true;
+            }
           }
         }
 
-        if (matchedActions.length > 0) {
-          setActiveTestActions((prev) => {
-            const next = new Set(prev);
-            matchedActions.forEach((act) => next.add(act));
-            return next;
-          });
+        if (changed) {
+          syncActiveTestActions();
         }
       }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       const lowerKey = e.key.toLowerCase();
-      const matchedActions: string[] = [];
+      let changed = false;
+
       for (const [actionId, boundKey] of Object.entries(kbMapping)) {
         if (boundKey && boundKey.toLowerCase() === lowerKey) {
-          matchedActions.push(actionId);
+          if (kbMouseHeldRef.current.has(actionId)) {
+            kbMouseHeldRef.current.delete(actionId);
+            changed = true;
+          }
         }
       }
 
-      if (matchedActions.length > 0) {
-        setActiveTestActions((prev) => {
-          const next = new Set(prev);
-          matchedActions.forEach((act) => next.delete(act));
-          return next;
-        });
+      if (changed) {
+        syncActiveTestActions();
       }
     };
 
@@ -378,17 +591,17 @@ export function ControlsModal({
     };
   }, [
     open,
-    listeningKeyFor,
+    listeningActionId,
     isWizardActive,
-    wizardDevice,
     wizardStepIndex,
     actions,
     currentWizardAction,
     kbMapping,
     selectedSlot,
+    syncActiveTestActions,
   ]);
 
-  // Gamepad Polling Engine: Handles Wizard, Single-button rebinding, and Live Glow
+  // Gamepad Polling Engine: Handles Wizard, Single-button rebinding, and Live Glow + Release
   useEffect(() => {
     if (!open) {
       cancelAnimationFrame(rafRef.current);
@@ -419,7 +632,7 @@ export function ControlsModal({
             setLastLiveInput(`Pad: ${buttonLabel(i)}`);
 
             // Wizard gamepad input handling
-            if (isWizardActive && wizardDevice === "gamepad") {
+            if (isWizardActive) {
               const now = Date.now();
               if (now - lastActionTimestamp.current > 250) {
                 lastActionTimestamp.current = now;
@@ -441,12 +654,12 @@ export function ControlsModal({
             }
 
             // Single manual button rebinding
-            if (listeningFor) {
+            if (listeningActionId) {
               playBeep();
-              const updated = assignGamepadBinding(mapping, listeningFor, btnKey);
+              const updated = assignGamepadBinding(mapping, listeningActionId, btnKey);
               setMapping(updated);
               savePlayerGamepadMapping(selectedSlot, updated);
-              setListeningFor(null);
+              setListeningActionId(null);
               if (listenTimeout.current) clearTimeout(listenTimeout.current);
               prevDownRef.current = currentDown;
               return;
@@ -483,7 +696,7 @@ export function ControlsModal({
 
               setLastLiveInput(`Pad: ${niceAxisName}`);
 
-              if (isWizardActive && wizardDevice === "gamepad") {
+              if (isWizardActive) {
                 const now = Date.now();
                 if (now - lastActionTimestamp.current > 250) {
                   lastActionTimestamp.current = now;
@@ -504,12 +717,12 @@ export function ControlsModal({
                 }
               }
 
-              if (listeningFor) {
+              if (listeningActionId) {
                 playBeep();
-                const updated = assignGamepadBinding(mapping, listeningFor, axisKey);
+                const updated = assignGamepadBinding(mapping, listeningActionId, axisKey);
                 setMapping(updated);
                 savePlayerGamepadMapping(selectedSlot, updated);
-                setListeningFor(null);
+                setListeningActionId(null);
                 if (listenTimeout.current) clearTimeout(listenTimeout.current);
                 prevDownRef.current = currentDown;
                 return;
@@ -519,13 +732,22 @@ export function ControlsModal({
         }
       }
 
-      // Update live glow for gamepad actions
-      if (gamepadActionsHeld.size > 0) {
-        setActiveTestActions((prev) => {
-          const next = new Set(prev);
-          gamepadActionsHeld.forEach((a) => next.add(a));
-          return next;
-        });
+      // Live glow & in-game trigger synchronization: fires on both press AND release!
+      let padChanged = false;
+      if (gamepadActionsHeld.size !== padHeldRef.current.size) {
+        padChanged = true;
+      } else {
+        for (const act of gamepadActionsHeld) {
+          if (!padHeldRef.current.has(act)) {
+            padChanged = true;
+            break;
+          }
+        }
+      }
+
+      if (padChanged) {
+        padHeldRef.current = gamepadActionsHeld;
+        syncActiveTestActions();
       }
 
       prevDownRef.current = currentDown;
@@ -536,32 +758,25 @@ export function ControlsModal({
     return () => cancelAnimationFrame(rafRef.current);
   }, [
     open,
-    listeningFor,
+    listeningActionId,
     isWizardActive,
-    wizardDevice,
     wizardStepIndex,
     actions,
     currentWizardAction,
     mapping,
     selectedSlot,
+    syncActiveTestActions,
   ]);
 
-  const startListening = (actionName: string) => {
+  const startSingleRebind = (actionId: string) => {
     setIsWizardActive(false);
-    setListeningFor(actionName);
+    setListeningActionId(actionId);
     if (listenTimeout.current) clearTimeout(listenTimeout.current);
-    listenTimeout.current = setTimeout(() => setListeningFor(null), 6000);
+    listenTimeout.current = setTimeout(() => setListeningActionId(null), 8000);
   };
 
-  const startListeningKey = (actionName: string) => {
-    setIsWizardActive(false);
-    setListeningKeyFor(actionName);
-  };
-
-  const startWizard = (device: "keyboard" | "gamepad") => {
-    setListeningFor(null);
-    setListeningKeyFor(null);
-    setWizardDevice(device);
+  const startWizard = () => {
+    setListeningActionId(null);
     setWizardStepIndex(0);
     setWizardCompleted(false);
     setWizardJustMapped(null);
@@ -577,25 +792,33 @@ export function ControlsModal({
     }
   };
 
-  const cancelWizard = () => {
-    setIsWizardActive(false);
+  const prevWizardStep = () => {
+    if (wizardStepIndex > 0) {
+      setWizardStepIndex((prev) => prev - 1);
+    }
   };
 
+  const cancelWizard = () => {
+    setIsWizardActive(false);
+    setWizardJustMapped(null);
+  };
+
+  // 1-Click Preset appliers
   const applyPreset = (preset: KeyboardMapping, label: string) => {
     playBeep();
-    setKbMapping({ ...preset });
+    setKbMapping(preset);
     savePlayerKeyboardMapping(selectedSlot, preset);
-    setToastMessage(`Applied ${label} Preset to Player ${selectedSlot}!`);
+    setToastMessage(`Applied ${label} preset to Player ${selectedSlot}!`);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
   const resetAllDefaults = () => {
     playBeep();
     const defaultKb = selectedSlot === 2 ? WASD_KEYBOARD_MAPPING : DEFAULT_KEYBOARD_MAPPING;
-    setKbMapping({ ...defaultKb });
+    setKbMapping(defaultKb);
     savePlayerKeyboardMapping(selectedSlot, defaultKb);
 
-    setMapping({ ...DEFAULT_MAPPING });
+    setMapping(DEFAULT_MAPPING);
     savePlayerGamepadMapping(selectedSlot, DEFAULT_MAPPING);
 
     setToastMessage(`Reset Player ${selectedSlot} to factory defaults!`);
@@ -609,48 +832,71 @@ export function ControlsModal({
     className?: string,
   ) => {
     const isLit = activeTestActions.has(actionId);
-    const isRebinding = listeningKeyFor === actionId || listeningFor === actionId;
+    const isRebinding = listeningActionId === actionId;
+    const isWizardTarget = isWizardActive && currentWizardAction?.id === actionId;
     const assignedKey = kbMapping[actionId] || "";
+    const assignedPad = formatGamepadBinding(actionId);
 
     return (
       <button
         key={actionId}
         type="button"
-        onClick={() => startListeningKey(actionId)}
+        onClick={() => startSingleRebind(actionId)}
+        onContextMenu={(e) => {
+          // If in rebinding mode, right-click binds Mouse2
+          if (listeningActionId === actionId) {
+            e.preventDefault();
+            e.stopPropagation();
+            handleMouseBinding(e.button, actionId);
+          }
+        }}
         className={cn(
-          "relative flex flex-col items-center justify-center transition-all duration-150 select-none group border rounded-xl",
+          "relative flex flex-col items-center justify-center transition-all duration-150 select-none group border rounded-xl p-1 text-center",
           isLit
-            ? "bg-emerald-400 text-black border-emerald-300 shadow-[0_0_20px_rgba(52,211,153,1)] scale-110 font-black z-20"
+            ? "bg-emerald-400 text-black border-emerald-300 shadow-[0_0_22px_rgba(52,211,153,1)] scale-110 font-black z-30"
+            : isWizardTarget
+            ? "ring-4 ring-amber-400 bg-amber-500/30 text-amber-200 border-amber-300 shadow-[0_0_25px_rgba(251,191,36,0.9)] animate-pulse scale-110 z-30"
             : isRebinding
             ? "bg-accent text-accent-foreground border-accent shadow-[0_0_20px_rgba(224,0,11,0.8)] animate-pulse ring-2 ring-accent scale-105 z-20"
             : "bg-neutral-800/90 text-neutral-200 border-neutral-700/80 hover:border-primary/60 hover:bg-neutral-700/80 hover:scale-105",
           className,
         )}
-        title={`Click to rebind ${label}. Currently bound to [${formatKeyLabel(assignedKey)}]`}
+        title={`Click to rebind ${label}. Currently bound to [${formatBindingLabel(assignedKey)}] / [${assignedPad}]`}
       >
         <span className="text-[11px] font-black uppercase font-display tracking-tight leading-none">
           {label}
         </span>
         <span
           className={cn(
-            "text-[9px] font-mono font-bold mt-0.5 px-1 rounded",
-            isLit ? "bg-black/40 text-emerald-100" : "bg-black/60 text-muted-foreground",
+            "text-[8px] font-mono font-bold mt-0.5 px-1 rounded truncate max-w-full",
+            isLit
+              ? "bg-black/50 text-emerald-200"
+              : isWizardTarget
+              ? "bg-amber-950/80 text-amber-200"
+              : "bg-black/60 text-muted-foreground",
           )}
         >
-          {isRebinding ? "Press..." : formatKeyLabel(assignedKey)}
+          {isRebinding ? "Press..." : formatBindingLabel(assignedKey)}
         </span>
+        {connectedPad && assignedPad !== "—" && (
+          <span className="text-[7px] font-mono text-muted-foreground/80 truncate max-w-full hidden sm:block">
+            {assignedPad}
+          </span>
+        )}
       </button>
     );
   };
+
+  const normCore = (activeCore || "segaMD").toLowerCase();
 
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
         if (!v) {
+          releaseAllInputs();
           setIsWizardActive(false);
-          setListeningFor(null);
-          setListeningKeyFor(null);
+          setListeningActionId(null);
           onClose();
         }
       }}
@@ -661,63 +907,66 @@ export function ControlsModal({
 
         <div className="p-4 sm:p-6 space-y-4">
           <DialogHeader className="space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pr-6">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-primary/20 border border-primary/40 flex items-center justify-center text-primary">
-                  <Gamepad2 className="w-5 h-5 text-accent animate-pulse" />
+            {/* 1. Auto-Detected Console & Controller High-Contrast Banner */}
+            <div className="p-3.5 rounded-2xl bg-neutral-900/95 border-2 border-primary/50 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-primary/20 border border-primary/40 flex items-center justify-center text-primary shrink-0 shadow-[0_0_15px_rgba(0,180,255,0.25)]">
+                  <Gamepad2 className="w-6 h-6 text-accent animate-pulse" />
                 </div>
-                <div>
-                  <DialogTitle className="font-display text-primary flex items-center gap-2 text-xl tracking-wide">
-                    Controls & Keybind Setup
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "text-xs font-bold py-0.5 px-2.5 uppercase tracking-wider font-mono",
+                        consoleSys.badgeColor,
+                      )}
+                    >
+                      {consoleSys.name}
+                    </Badge>
+                    <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
+                      Detected Console & Controller
+                    </span>
+                  </div>
+                  <DialogTitle className="text-base font-extrabold text-foreground font-display flex items-center gap-2">
+                    {getConsoleControllerTitle(activeCore)}
                   </DialogTitle>
-                  <p className="text-xs text-muted-foreground">
-                    1-click presets, step-by-step wizard, or tap buttons below to test live!
+                  <p className="text-[11px] text-muted-foreground font-mono flex items-center gap-2">
+                    <span className="text-primary font-semibold">{actions.length} Controller Buttons Mapped</span>
+                    <span>•</span>
+                    <span>System Core: <code className="text-accent">{activeCore || "segaMD"}</code></span>
                   </p>
                 </div>
               </div>
 
-              {/* Console Badge */}
-              <Badge
-                variant="outline"
-                className={cn(
-                  "text-xs font-bold py-1 px-3 uppercase tracking-wider self-start sm:self-auto",
-                  consoleSys.badgeColor,
-                )}
-              >
-                {consoleSys.name}
-              </Badge>
-            </div>
-
-            {/* 1. Player Slot Selector Pills (4 slots) */}
-            <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-border/50">
-              <span className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1 mr-1">
-                <Radio className="w-3.5 h-3.5 text-primary" /> Player Deck:
-              </span>
-              {[1, 2, 3, 4].map((slot) => {
-                const isSelected = selectedSlot === slot;
-                const isCurrentPlayer = playerSlot === slot;
-                return (
-                  <button
-                    key={slot}
-                    type="button"
-                    onClick={() => setSelectedSlot(slot)}
-                    className={cn(
-                      "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border shadow-sm",
-                      isSelected
-                        ? "bg-primary text-primary-foreground border-primary shadow-[0_0_12px_rgba(0,180,255,0.4)] ring-1 ring-primary scale-[1.02]"
-                        : "bg-muted/40 text-muted-foreground border-border/70 hover:border-primary/50 hover:text-foreground",
-                    )}
-                  >
-                    <Gamepad2 className="w-3.5 h-3.5" />
-                    <span>Player {slot}</span>
-                    {slot === 1 ? (
-                      <span className="text-[10px] opacity-75 font-mono">(Host)</span>
-                    ) : isCurrentPlayer ? (
-                      <span className="text-[10px] text-accent font-bold font-mono">(You)</span>
-                    ) : null}
-                  </button>
-                );
-              })}
+              {/* Player Slot Selector Pills (4 slots) */}
+              <div className="flex items-center gap-1.5 flex-wrap self-start md:self-center">
+                {[1, 2, 3, 4].map((slot) => {
+                  const isSelected = selectedSlot === slot;
+                  const isCurrentPlayer = playerSlot === slot;
+                  return (
+                    <button
+                      key={slot}
+                      type="button"
+                      onClick={() => setSelectedSlot(slot)}
+                      className={cn(
+                        "px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border shadow-sm",
+                        isSelected
+                          ? "bg-primary text-primary-foreground border-primary shadow-[0_0_12px_rgba(0,180,255,0.4)] ring-1 ring-primary scale-[1.02]"
+                          : "bg-muted/40 text-muted-foreground border-border/70 hover:border-primary/50 hover:text-foreground",
+                      )}
+                    >
+                      <Gamepad2 className="w-3.5 h-3.5" />
+                      <span>Player {slot}</span>
+                      {slot === 1 ? (
+                        <span className="text-[10px] opacity-75 font-mono">(Host)</span>
+                      ) : isCurrentPlayer ? (
+                        <span className="text-[10px] text-accent font-bold font-mono">(You)</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {/* 2. 1-Click Instant Presets Bar */}
@@ -780,20 +1029,20 @@ export function ControlsModal({
             </div>
           </DialogHeader>
 
-          {/* 3. Step-by-Step Keybind Wizard HUD */}
+          {/* 3. Single Unified Step-by-Step Setup Wizard (Keyboard + Mouse + Gamepad) */}
           {isWizardActive ? (
             <div className="p-4 rounded-2xl border-2 border-primary bg-gradient-to-br from-primary/20 via-card to-accent/20 shadow-[0_0_35px_rgba(0,180,255,0.35)] space-y-3 animate-in fade-in zoom-in-95 duration-200">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-primary/30 border border-primary/50 flex items-center justify-center text-primary">
+                  <div className="w-8 h-8 rounded-lg bg-primary/30 border border-primary/50 flex items-center justify-center text-primary">
                     <Wand2 className="w-4 h-4 text-accent animate-pulse" />
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-foreground font-display uppercase tracking-wider">
-                      Setup Wizard · Player {selectedSlot} ({wizardDevice.toUpperCase()})
+                      Unified Setup Wizard · Player {selectedSlot}
                     </h4>
                     <p className="text-[10px] text-muted-foreground font-mono">
-                      Button {wizardStepIndex + 1} of {actions.length}
+                      Step {wizardStepIndex + 1} of {actions.length} · {actions[wizardStepIndex]?.label}
                     </p>
                   </div>
                 </div>
@@ -803,20 +1052,30 @@ export function ControlsModal({
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={skipWizardStep}
-                    className="h-7 px-2.5 text-xs font-semibold border-border hover:border-primary/50"
+                    onClick={prevWizardStep}
+                    disabled={wizardStepIndex === 0}
+                    className="h-7 px-2 text-xs font-semibold border-border hover:border-primary/50 gap-1"
                   >
-                    Skip
+                    <ChevronLeft className="w-3.5 h-3.5" /> Back
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={skipWizardStep}
+                    className="h-7 px-2 text-xs font-semibold border-border hover:border-primary/50 gap-1"
+                  >
+                    Skip <ChevronRight className="w-3.5 h-3.5" />
                   </Button>
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
                     onClick={cancelWizard}
-                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                    title="Cancel (Esc)"
+                    className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive gap-1"
+                    title="Stop Wizard (Esc)"
                   >
-                    <X className="w-4 h-4" />
+                    <X className="w-3.5 h-3.5" /> Stop (Esc)
                   </Button>
                 </div>
               </div>
@@ -829,73 +1088,94 @@ export function ControlsModal({
                 />
               </div>
 
-              {/* Huge Action Prompt */}
-              <div className="py-3 px-4 rounded-xl bg-background/90 border border-primary/50 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
-                <div className="space-y-0.5">
-                  <span className="text-[10px] uppercase font-bold tracking-widest text-primary flex items-center justify-center sm:justify-start gap-1">
+              {/* Huge Action Prompt Card */}
+              <div className="py-3 px-4 rounded-xl bg-background/95 border border-primary/50 flex flex-col md:flex-row items-center justify-between gap-4">
+                <div className="space-y-1 text-center md:text-left">
+                  <span className="text-[10px] uppercase font-bold tracking-widest text-primary flex items-center justify-center md:justify-start gap-1">
                     <Sparkles className="w-3 h-3 text-accent" />
-                    Press Key or Button For:
+                    Press Desired Input for:
                   </span>
-                  <p className="text-2xl font-black text-foreground font-display tracking-wide uppercase">
-                    {currentWizardAction.label}
-                  </p>
+                  <div className="flex items-center justify-center md:justify-start gap-2">
+                    <span className="text-2xl sm:text-3xl font-black text-foreground font-display tracking-wide uppercase">
+                      {currentWizardAction.label}
+                    </span>
+                    {currentWizardAction.shortLabel && (
+                      <Badge className="bg-primary/20 text-primary border-primary/40 font-mono text-base px-2 py-0.5">
+                        {currentWizardAction.shortLabel}
+                      </Badge>
+                    )}
+                  </div>
                   <p className="text-[11px] text-muted-foreground font-sans">
-                    Press any key on keyboard or gamepad button (Escape to cancel)
+                    Press any <strong>Keyboard Key</strong>, move/press <strong>Gamepad Button/Stick</strong>, or click the box below for <strong>Mouse</strong>!
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-sm font-mono py-1.5 px-3 border-primary/40 bg-card">
-                    Current:{" "}
-                    <strong className="text-accent ml-1">
-                      {wizardDevice === "keyboard"
-                        ? formatKeyLabel(kbMapping[currentWizardAction.id] || "")
-                        : formatGamepadBinding(currentWizardAction.id)}
-                    </strong>
-                  </Badge>
+                <div className="flex flex-col items-center md:items-end gap-2 shrink-0">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-xs font-mono py-1 px-2.5 border-primary/40 bg-card">
+                      Keyboard/Mouse:{" "}
+                      <strong className="text-cyan-400 ml-1">
+                        {formatBindingLabel(kbMapping[currentWizardAction.id])}
+                      </strong>
+                    </Badge>
+                    <Badge variant="outline" className="text-xs font-mono py-1 px-2.5 border-primary/40 bg-card">
+                      Gamepad:{" "}
+                      <strong className="text-amber-400 ml-1">
+                        {formatGamepadBinding(currentWizardAction.id)}
+                      </strong>
+                    </Badge>
+                  </div>
 
                   {wizardJustMapped && (
                     <Badge
                       variant="outline"
-                      className="text-xs font-mono py-1.5 px-2.5 border-emerald-500/50 bg-emerald-500/10 text-emerald-400 animate-in fade-in"
+                      className="text-xs font-mono py-1 px-2.5 border-emerald-500/50 bg-emerald-500/10 text-emerald-400 animate-in fade-in"
                     >
-                      <CheckCircle2 className="w-3 h-3 mr-1" /> Bound: {wizardJustMapped}
+                      <CheckCircle2 className="w-3 h-3 mr-1" /> Mapped: {wizardJustMapped}
                     </Badge>
                   )}
                 </div>
               </div>
+
+              {/* Mouse Capture Target Pad inside Wizard */}
+              <div
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleMouseBinding(e.button);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                className="w-full p-2.5 rounded-xl border-2 border-dashed border-accent/60 bg-accent/10 hover:bg-accent/20 cursor-pointer flex items-center justify-center gap-2 text-accent font-bold text-xs transition-all hover:scale-[1.01] select-none shadow-sm"
+                title="Click with ANY mouse button (Left, Right, Middle, Back, Forward) to bind"
+              >
+                <Mouse className="w-4 h-4 text-accent animate-bounce" />
+                <span>🖱️ Click Here with Any Mouse Button (Left, Right, Middle, Side) to Bind Mouse</span>
+              </div>
             </div>
           ) : (
-            /* Wizard Launch Banner */
+            /* Unified Wizard Launch Banner */
             <div className="p-3.5 rounded-2xl border border-primary/40 bg-gradient-to-r from-primary/10 via-card to-accent/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
               <div className="space-y-0.5">
                 <h4 className="text-sm font-bold text-foreground flex items-center gap-1.5 font-display">
-                  <Wand2 className="w-4 h-4 text-accent animate-pulse" /> 1-Click Step-by-Step Setup Wizard
+                  <Wand2 className="w-4 h-4 text-accent animate-pulse" /> Unified Setup Wizard
                 </h4>
                 <p className="text-xs text-muted-foreground">
-                  Walks you through each button one-by-one in 10 seconds with audio feedback.
+                  Walks through each controller button in sequence — works seamlessly with Keyboard, Mouse, or Controller!
                 </p>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => startWizard("keyboard")}
-                  className="h-8 px-3 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground gap-1.5 shadow-sm shadow-primary/30"
-                >
-                  <Keyboard className="w-3.5 h-3.5" /> Wizard (Keyboard)
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => startWizard("gamepad")}
-                  className="h-8 px-3 text-xs font-bold border-primary/50 text-primary hover:bg-primary hover:text-primary-foreground gap-1.5"
-                >
-                  <Gamepad2 className="w-3.5 h-3.5 text-accent" /> Wizard (Gamepad)
-                </Button>
-              </div>
+              <Button
+                type="button"
+                size="sm"
+                onClick={startWizard}
+                className="h-9 px-4 text-xs font-extrabold bg-gradient-to-r from-primary via-primary to-accent hover:from-primary/90 hover:to-accent/90 text-primary-foreground gap-2 shadow-[0_0_20px_rgba(0,180,255,0.4)] animate-pulse hover:animate-none hover:scale-105 transition-all"
+              >
+                <Zap className="w-4 h-4 text-yellow-300 fill-yellow-300" />
+                <span>Start Interactive Keybind Wizard (Keyboard, Mouse, or Controller)</span>
+              </Button>
             </div>
           )}
 
@@ -919,9 +1199,54 @@ export function ControlsModal({
             </div>
           )}
 
+          {/* Active Single-Button Rebinding Helper Card */}
+          {listeningActionId && (
+            <div className="p-3 rounded-xl border-2 border-accent bg-accent/15 text-accent-foreground flex flex-col sm:flex-row items-center justify-between gap-3 shadow-[0_0_20px_rgba(224,0,11,0.4)] animate-in fade-in zoom-in-95">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-accent/30 flex items-center justify-center font-bold text-accent">
+                  <Sparkles className="w-4 h-4 animate-spin" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold font-display uppercase tracking-wider">
+                    Rebinding: {actions.find((a) => a.id === listeningActionId)?.label || listeningActionId}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Press any <strong>Keyboard Key</strong>, move/press <strong>Gamepad</strong>, or click the button below to bind <strong>Mouse</strong> (Escape to cancel).
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleMouseBinding(e.button, listeningActionId);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  className="px-3 py-1.5 rounded-lg border-2 border-dashed border-accent bg-background/80 hover:bg-accent/20 cursor-pointer text-xs font-bold text-accent flex items-center gap-1.5 shadow-sm"
+                >
+                  <Mouse className="w-3.5 h-3.5" />
+                  <span>Click to Bind Mouse</span>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setListeningActionId(null)}
+                  className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  Cancel (Esc)
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* 4. Interactive Visual Live Test Gamepad */}
           <div className="p-4 rounded-2xl border-2 border-border/80 bg-neutral-950/80 shadow-inner relative overflow-hidden space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
@@ -932,13 +1257,26 @@ export function ControlsModal({
                 </span>
               </div>
 
-              <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground">
+              {/* Live Test Pad & Detected Badges */}
+              <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground flex-wrap">
+                {/* Mouse Test Pad Button */}
+                <div
+                  onMouseDown={handleMouseTestDown}
+                  onMouseUp={handleMouseTestUp}
+                  onContextMenu={(e) => e.preventDefault()}
+                  className="px-2.5 py-1 rounded-lg border border-dashed border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/20 active:bg-emerald-500/30 text-emerald-300 text-[11px] font-bold cursor-pointer select-none flex items-center gap-1.5 transition-colors shadow-sm"
+                  title="Click with Left, Right, Middle, or Side buttons to test mouse controls live"
+                >
+                  <Mouse className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>🖱️ Click Here to Test Mouse Buttons</span>
+                </div>
+
                 {lastLiveInput ? (
                   <Badge variant="outline" className="border-emerald-500/50 text-emerald-400 bg-emerald-500/10 text-[10px] py-0.5">
                     Detected: {lastLiveInput}
                   </Badge>
                 ) : (
-                  <span className="text-[10px] text-muted-foreground/80">Press any key/button to test</span>
+                  <span className="text-[10px] text-muted-foreground/80">Press key/pad to test</span>
                 )}
                 {connectedPad && (
                   <Badge variant="outline" className="border-border text-muted-foreground text-[10px] py-0.5 hidden sm:inline-flex">
@@ -948,29 +1286,57 @@ export function ControlsModal({
               </div>
             </div>
 
-            {/* Graphical Gamepad Chassis */}
-            <div className="w-full max-w-lg mx-auto p-4 rounded-3xl bg-neutral-900/90 border border-neutral-700/80 shadow-2xl relative select-none">
+            {/* Graphical Gamepad Chassis: Dynamically Adapts to Console */}
+            <div className="w-full max-w-xl mx-auto p-4 rounded-3xl bg-neutral-900/90 border border-neutral-700/80 shadow-2xl relative select-none">
               {/* Top Shoulder Triggers */}
-              <div className="flex justify-between px-6 mb-3">
-                {actions.some((a) => a.id === "l" || a.id === "l1") ? (
-                  renderVirtualPadButton(
-                    actions.find((a) => a.id === "l" || a.id === "l1")!.id,
-                    "L1 / L",
-                    "w-20 h-7 rounded-lg",
-                  )
-                ) : (
-                  <div className="w-20" />
-                )}
-
-                {actions.some((a) => a.id === "r" || a.id === "r1") ? (
-                  renderVirtualPadButton(
-                    actions.find((a) => a.id === "r" || a.id === "r1")!.id,
-                    "R1 / R",
-                    "w-20 h-7 rounded-lg",
-                  )
-                ) : (
-                  <div className="w-20" />
-                )}
+              <div className="flex justify-between items-center px-4 mb-3 gap-2">
+                {normCore === "n64" ? (
+                  <>
+                    <div className="flex items-center gap-1.5">
+                      {renderVirtualPadButton("l", "L Bumper", "w-16 h-7 rounded-lg text-[10px]")}
+                      {renderVirtualPadButton("z", "Z Trigger", "w-16 h-7 rounded-lg text-[10px] bg-red-950/60 border-red-500/50 text-red-200")}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {renderVirtualPadButton("r", "R Bumper", "w-16 h-7 rounded-lg text-[10px]")}
+                    </div>
+                  </>
+                ) : normCore === "psx" ? (
+                  <>
+                    <div className="flex items-center gap-1">
+                      {renderVirtualPadButton("l2", "L2", "w-12 h-6 rounded-lg text-[9px]")}
+                      {renderVirtualPadButton("l1", "L1", "w-12 h-6 rounded-lg text-[9px]")}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {renderVirtualPadButton("r1", "R1", "w-12 h-6 rounded-lg text-[9px]")}
+                      {renderVirtualPadButton("r2", "R2", "w-12 h-6 rounded-lg text-[9px]")}
+                    </div>
+                  </>
+                ) : actions.some((a) => a.id === "l" || a.id === "l1") || actions.some((a) => a.id === "r" || a.id === "r1") ? (
+                  <>
+                    <div>
+                      {actions.some((a) => a.id === "l" || a.id === "l1") ? (
+                        renderVirtualPadButton(
+                          actions.find((a) => a.id === "l" || a.id === "l1")!.id,
+                          "L Shoulder",
+                          "w-20 h-7 rounded-lg text-[10px]",
+                        )
+                      ) : (
+                        <div className="w-20" />
+                      )}
+                    </div>
+                    <div>
+                      {actions.some((a) => a.id === "r" || a.id === "r1") ? (
+                        renderVirtualPadButton(
+                          actions.find((a) => a.id === "r" || a.id === "r1")!.id,
+                          "R Shoulder",
+                          "w-20 h-7 rounded-lg text-[10px]",
+                        )
+                      ) : (
+                        <div className="w-20" />
+                      )}
+                    </div>
+                  </>
+                ) : null}
               </div>
 
               {/* Main Controller Face: D-Pad, Center Buttons, Action Buttons */}
@@ -986,8 +1352,8 @@ export function ControlsModal({
                   {renderVirtualPadButton("down", "▼", "w-11 h-10 mt-1")}
                 </div>
 
-                {/* Center: System Logo & Start/Select Buttons (4 cols) */}
-                <div className="col-span-4 flex flex-col items-center justify-center space-y-3">
+                {/* Center: System Logo & Start/Select Buttons (3 cols) */}
+                <div className="col-span-3 flex flex-col items-center justify-center space-y-3">
                   <div className="text-center">
                     <span className="font-display font-black tracking-widest text-xs uppercase text-primary/80">
                       {consoleSys.shortName}
@@ -995,18 +1361,39 @@ export function ControlsModal({
                     <div className="text-[9px] font-mono text-muted-foreground/60">PLAYER {selectedSlot}</div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    {actions.some((a) => a.id === "mode") &&
-                      renderVirtualPadButton("mode", "SEL", "w-11 h-7 rounded-full text-[9px]")}
+                  <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                    {actions.some((a) => a.id === "mode" || a.id === "select") &&
+                      renderVirtualPadButton(
+                        actions.find((a) => a.id === "mode" || a.id === "select")!.id,
+                        actions.find((a) => a.id === "mode" || a.id === "select")!.shortLabel || "SEL",
+                        "w-11 h-7 rounded-full text-[9px]",
+                      )}
                     {actions.some((a) => a.id === "start") &&
                       renderVirtualPadButton("start", "START", "w-12 h-7 rounded-full text-[9px]")}
                   </div>
                 </div>
 
-                {/* Right: Face Action Buttons (4 cols) */}
-                <div className="col-span-4 flex items-center justify-center">
-                  {/* If Sega Genesis (6-button: X/Y/Z top, A/B/C bottom) */}
-                  {actions.some((a) => a.id === "c") && actions.some((a) => a.id === "z") ? (
+                {/* Right: Face Action Buttons (5 cols) */}
+                <div className="col-span-5 flex items-center justify-center">
+                  {normCore === "n64" ? (
+                    /* N64 Action Buttons + 4 Yellow C-Buttons Diamond */
+                    <div className="flex items-center justify-center gap-2">
+                      <div className="flex flex-col items-center gap-2 transform -rotate-12">
+                        {renderVirtualPadButton("b", "B", "w-9 h-9 rounded-full bg-blue-950 border-blue-500/50 text-blue-200")}
+                        {renderVirtualPadButton("a", "A", "w-10 h-10 rounded-full bg-emerald-950 border-emerald-500/50 text-emerald-200")}
+                      </div>
+                      <div className="flex flex-col items-center p-1 rounded-2xl bg-amber-950/20 border border-amber-500/30">
+                        {renderVirtualPadButton("c-up", "C▲", "w-8 h-8 rounded-full bg-amber-900/50 border-amber-500/60 text-amber-300 text-[10px] mb-0.5")}
+                        <div className="flex items-center gap-0.5">
+                          {renderVirtualPadButton("c-left", "C◀", "w-8 h-8 rounded-full bg-amber-900/50 border-amber-500/60 text-amber-300 text-[10px]")}
+                          <div className="w-3.5 h-3.5 rounded-full bg-amber-500/20 border border-amber-500/40" />
+                          {renderVirtualPadButton("c-right", "C▶", "w-8 h-8 rounded-full bg-amber-900/50 border-amber-500/60 text-amber-300 text-[10px]")}
+                        </div>
+                        {renderVirtualPadButton("c-down", "C▼", "w-8 h-8 rounded-full bg-amber-900/50 border-amber-500/60 text-amber-300 text-[10px] mt-0.5")}
+                      </div>
+                    </div>
+                  ) : actions.some((a) => a.id === "c") && actions.some((a) => a.id === "z") ? (
+                    /* Sega Genesis / Mega Drive (6-Button: X/Y/Z top, A/B/C bottom) */
                     <div className="space-y-1.5">
                       <div className="flex items-center gap-1 justify-center">
                         {renderVirtualPadButton("x", "X", "w-9 h-9 rounded-full")}
@@ -1034,12 +1421,20 @@ export function ControlsModal({
                         renderVirtualPadButton("b", actions.find((a) => a.id === "b")!.shortLabel || "B", "w-10 h-10 rounded-full mt-1")}
                     </div>
                   ) : (
-                    /* 2-button (NES / GBA) */
+                    /* 2-Button / 1-Button (NES / GBA / GB / Sega Master System / Atari) */
                     <div className="flex items-center gap-2 transform -rotate-12">
-                      {actions.some((a) => a.id === "b") &&
-                        renderVirtualPadButton("b", "B", "w-11 h-11 rounded-full")}
-                      {actions.some((a) => a.id === "a") &&
-                        renderVirtualPadButton("a", "A", "w-11 h-11 rounded-full")}
+                      {actions.some((a) => a.id === "b" || a.id === "1") &&
+                        renderVirtualPadButton(
+                          actions.find((a) => a.id === "b" || a.id === "1")!.id,
+                          actions.find((a) => a.id === "b" || a.id === "1")!.shortLabel || "B",
+                          "w-11 h-11 rounded-full",
+                        )}
+                      {actions.some((a) => a.id === "a" || a.id === "2") &&
+                        renderVirtualPadButton(
+                          actions.find((a) => a.id === "a" || a.id === "2")!.id,
+                          actions.find((a) => a.id === "a" || a.id === "2")!.shortLabel || "A",
+                          "w-11 h-11 rounded-full",
+                        )}
                     </div>
                   )}
                 </div>
@@ -1047,7 +1442,7 @@ export function ControlsModal({
             </div>
 
             <p className="text-[11px] text-center text-muted-foreground/80 font-sans">
-              Click any button above to rebind it immediately, or use keys on keyboard to watch them light up!
+              Click any button above to rebind, or test on your Keyboard, Mouse, or Controller to watch them glow green and move in-game!
             </p>
           </div>
 
@@ -1058,15 +1453,15 @@ export function ControlsModal({
                 <Sliders className="w-3.5 h-3.5 text-primary" /> All Actions & Key Bindings:
               </span>
               <span className="text-[10px] font-mono text-muted-foreground">
-                Player {selectedSlot} configuration
+                Player {selectedSlot} configuration · {actions.length} Total
               </span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1">
               {actions.map((act) => {
                 const actionName = act.id;
-                const isListeningKey = listeningKeyFor === actionName;
-                const isListeningPad = listeningFor === actionName;
+                const isListening = listeningActionId === actionName;
+                const isWizardTarget = isWizardActive && currentWizardAction?.id === actionName;
                 const boundKey = kbMapping[actionName] || "";
                 const boundGamepad = formatGamepadBinding(actionName);
                 const isLit = activeTestActions.has(actionName);
@@ -1078,83 +1473,67 @@ export function ControlsModal({
                       "flex items-center justify-between p-2 rounded-xl border transition-all",
                       isLit
                         ? "border-emerald-400 bg-emerald-500/10 shadow-[0_0_12px_rgba(16,185,129,0.3)]"
-                        : "border-border/70 bg-card/60 hover:border-primary/40",
+                        : isWizardTarget
+                        ? "border-amber-400 bg-amber-500/15 ring-2 ring-amber-400"
+                        : isListening
+                        ? "border-accent bg-accent/15 ring-2 ring-accent"
+                        : "border-border/60 bg-muted/20 hover:border-border",
                     )}
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <span
+                      <div
                         className={cn(
-                          "w-2 h-2 rounded-full",
-                          isLit ? "bg-emerald-400 animate-ping" : "bg-muted-foreground/40",
+                          "w-2.5 h-2.5 rounded-full transition-colors shrink-0",
+                          isLit
+                            ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,1)]"
+                            : "bg-neutral-600",
                         )}
                       />
-                      <span className="text-xs font-bold text-foreground truncate uppercase font-display">
-                        {act.label}
-                      </span>
+                      <div className="min-w-0">
+                        <span className="text-xs font-bold text-foreground block truncate">
+                          {act.label}
+                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-mono text-cyan-400">
+                            {formatBindingLabel(boundKey)}
+                          </span>
+                          <span className="text-[9px] text-muted-foreground/60">•</span>
+                          <span className="text-[10px] font-mono text-amber-400">
+                            {boundGamepad}
+                          </span>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Keyboard Button */}
-                      <button
-                        type="button"
-                        onClick={() => startListeningKey(actionName)}
-                        className={cn(
-                          "px-2.5 py-1 rounded-lg border text-xs font-mono font-bold transition-all",
-                          isListeningKey
-                            ? "bg-accent text-accent-foreground border-accent animate-pulse ring-2 ring-accent"
-                            : "bg-background border-border hover:border-primary text-foreground hover:bg-primary/10",
-                        )}
-                        title="Click to rebind keyboard key"
-                      >
-                        {isListeningKey ? "Press key…" : formatKeyLabel(boundKey)}
-                      </button>
-
-                      {/* Gamepad Button */}
-                      <button
-                        type="button"
-                        onClick={() => startListening(actionName)}
-                        className={cn(
-                          "px-2.5 py-1 rounded-lg border text-xs font-mono font-bold transition-all",
-                          isListeningPad
-                            ? "bg-accent text-accent-foreground border-accent animate-pulse ring-2 ring-accent"
-                            : "bg-muted/40 border-border/80 text-muted-foreground hover:border-primary hover:text-foreground",
-                        )}
-                        title="Click to rebind gamepad button"
-                      >
-                        {isListeningPad ? "Press pad…" : boundGamepad}
-                      </button>
+                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                      {isListening ? (
+                        <div className="flex items-center gap-1">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => setListeningActionId(null)}
+                            className="h-7 px-2 text-xs font-bold"
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => startSingleRebind(actionName)}
+                          className="h-7 px-2 text-xs font-semibold border-border hover:border-primary/60 hover:bg-primary/10"
+                        >
+                          Rebind
+                        </Button>
+                      )}
                     </div>
                   </div>
                 );
               })}
             </div>
-          </div>
-
-          {/* Footer Controls */}
-          <div className="flex items-center justify-between pt-3 border-t border-border/50">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={resetAllDefaults}
-              className="text-xs text-muted-foreground hover:text-foreground gap-1.5 h-8"
-            >
-              <RotateCcw className="w-3.5 h-3.5" /> Reset Defaults (P{selectedSlot})
-            </Button>
-
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                setListeningKeyFor(null);
-                setListeningFor(null);
-                setIsWizardActive(false);
-                onClose();
-              }}
-              className="h-8 px-6 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm shadow-primary/30"
-            >
-              Done / Close
-            </Button>
           </div>
         </div>
       </DialogContent>

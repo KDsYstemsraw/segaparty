@@ -24,6 +24,192 @@ export const GENESIS_ACTIONS = [
 
 export type GenesisAction = (typeof GENESIS_ACTIONS)[number];
 
+export interface ConsoleActionInfo {
+  id: string;
+  label: string;
+  shortLabel: string;
+  category: "dpad" | "face" | "shoulder" | "system" | "cbutton";
+}
+
+export function getConsoleControllerTitle(coreId?: string): string {
+  const normCore = (coreId || getRomCore() || "segaMD").toLowerCase();
+
+  switch (normCore) {
+    case "psx":
+      return "PlayStation DualShock Pad";
+    case "psp":
+      return "PSP Handheld Controls";
+    case "snes":
+      return "Super Nintendo Controller";
+    case "nds":
+      return "Nintendo DS Dual-Screen Pad";
+    case "n64":
+      return "Nintendo 64 3-Prong Controller";
+    case "gba":
+      return "Game Boy Advance Handheld";
+    case "gb":
+      return "Game Boy Classic Pad";
+    case "nes":
+      return "NES Classic Controller";
+    case "segams":
+    case "master-system":
+      return "Master System 2-Button Pad";
+    case "segagg":
+    case "gamegear":
+      return "Sega Game Gear Portable";
+    case "atari2600":
+    case "atari":
+      return "Atari CX40 Joystick";
+    case "arcade":
+    case "mame":
+    case "fbneo":
+      return "6-Button Arcade Fight Stick";
+    case "segacd":
+    case "sega32x":
+    case "segamd":
+    default:
+      return "Sega Genesis 6-Button Arcade Pad";
+  }
+}
+
+export function getConsoleActions(coreId?: string): ConsoleActionInfo[] {
+  const normCore = (coreId || getRomCore() || "segaMD").toLowerCase();
+
+  const dpad: ConsoleActionInfo[] = [
+    { id: "up", label: "D-Pad Up", shortLabel: "▲", category: "dpad" },
+    { id: "down", label: "D-Pad Down", shortLabel: "▼", category: "dpad" },
+    { id: "left", label: "D-Pad Left", shortLabel: "◀", category: "dpad" },
+    { id: "right", label: "D-Pad Right", shortLabel: "▶", category: "dpad" },
+  ];
+
+  if (normCore === "psx") {
+    return [
+      ...dpad,
+      { id: "b", label: "Cross (✕)", shortLabel: "✕", category: "face" },
+      { id: "y", label: "Square (□)", shortLabel: "□", category: "face" },
+      { id: "a", label: "Circle (○)", shortLabel: "○", category: "face" },
+      { id: "x", label: "Triangle (△)", shortLabel: "△", category: "face" },
+      { id: "l1", label: "L1 Bumper", shortLabel: "L1", category: "shoulder" },
+      { id: "r1", label: "R1 Bumper", shortLabel: "R1", category: "shoulder" },
+      { id: "l2", label: "L2 Trigger", shortLabel: "L2", category: "shoulder" },
+      { id: "r2", label: "R2 Trigger", shortLabel: "R2", category: "shoulder" },
+      { id: "mode", label: "Select", shortLabel: "SEL", category: "system" },
+      { id: "start", label: "Start", shortLabel: "START", category: "system" },
+    ];
+  }
+
+  if (normCore === "psp") {
+    return [
+      ...dpad,
+      { id: "b", label: "Cross (✕)", shortLabel: "✕", category: "face" },
+      { id: "y", label: "Square (□)", shortLabel: "□", category: "face" },
+      { id: "a", label: "Circle (○)", shortLabel: "○", category: "face" },
+      { id: "x", label: "Triangle (△)", shortLabel: "△", category: "face" },
+      { id: "l", label: "L Trigger", shortLabel: "L", category: "shoulder" },
+      { id: "r", label: "R Trigger", shortLabel: "R", category: "shoulder" },
+      { id: "mode", label: "Select", shortLabel: "SEL", category: "system" },
+      { id: "start", label: "Start", shortLabel: "START", category: "system" },
+    ];
+  }
+
+  if (normCore === "snes" || normCore === "nds") {
+    return [
+      ...dpad,
+      { id: "b", label: "B Button", shortLabel: "B", category: "face" },
+      { id: "a", label: "A Button", shortLabel: "A", category: "face" },
+      { id: "y", label: "Y Button", shortLabel: "Y", category: "face" },
+      { id: "x", label: "X Button", shortLabel: "X", category: "face" },
+      { id: "l", label: "L Shoulder", shortLabel: "L", category: "shoulder" },
+      { id: "r", label: "R Shoulder", shortLabel: "R", category: "shoulder" },
+      { id: "mode", label: "Select", shortLabel: "SEL", category: "system" },
+      { id: "start", label: "Start", shortLabel: "START", category: "system" },
+    ];
+  }
+
+  if (normCore === "n64") {
+    return [
+      ...dpad,
+      { id: "a", label: "A Button", shortLabel: "A", category: "face" },
+      { id: "b", label: "B Button", shortLabel: "B", category: "face" },
+      { id: "z", label: "Z Trigger", shortLabel: "Z", category: "shoulder" },
+      { id: "l", label: "L Shoulder", shortLabel: "L", category: "shoulder" },
+      { id: "r", label: "R Shoulder", shortLabel: "R", category: "shoulder" },
+      { id: "c-up", label: "C-Up", shortLabel: "C▲", category: "cbutton" },
+      { id: "c-down", label: "C-Down", shortLabel: "C▼", category: "cbutton" },
+      { id: "c-left", label: "C-Left", shortLabel: "C◀", category: "cbutton" },
+      { id: "c-right", label: "C-Right", shortLabel: "C▶", category: "cbutton" },
+      { id: "start", label: "Start", shortLabel: "START", category: "system" },
+    ];
+  }
+
+  if (normCore === "gba") {
+    return [
+      ...dpad,
+      { id: "b", label: "B Button", shortLabel: "B", category: "face" },
+      { id: "a", label: "A Button", shortLabel: "A", category: "face" },
+      { id: "l", label: "L Shoulder", shortLabel: "L", category: "shoulder" },
+      { id: "r", label: "R Shoulder", shortLabel: "R", category: "shoulder" },
+      { id: "mode", label: "Select", shortLabel: "SEL", category: "system" },
+      { id: "start", label: "Start", shortLabel: "START", category: "system" },
+    ];
+  }
+
+  if (normCore === "nes" || normCore === "gb") {
+    return [
+      ...dpad,
+      { id: "b", label: "B Button", shortLabel: "B", category: "face" },
+      { id: "a", label: "A Button", shortLabel: "A", category: "face" },
+      { id: "mode", label: "Select", shortLabel: "SEL", category: "system" },
+      { id: "start", label: "Start", shortLabel: "START", category: "system" },
+    ];
+  }
+
+  if (normCore === "segams" || normCore === "segagg") {
+    return [
+      ...dpad,
+      { id: "b", label: "Button 1", shortLabel: "1", category: "face" },
+      { id: "a", label: "Button 2", shortLabel: "2", category: "face" },
+      { id: "start", label: "Start / Pause", shortLabel: "START", category: "system" },
+    ];
+  }
+
+  if (normCore === "atari2600" || normCore === "atari") {
+    return [
+      ...dpad,
+      { id: "b", label: "Fire Button", shortLabel: "FIRE", category: "face" },
+      { id: "mode", label: "Game Select", shortLabel: "SEL", category: "system" },
+      { id: "start", label: "Game Reset", shortLabel: "RESET", category: "system" },
+    ];
+  }
+
+  if (normCore === "arcade" || normCore === "mame" || normCore === "fbneo") {
+    return [
+      ...dpad,
+      { id: "a", label: "Button 1", shortLabel: "B1", category: "face" },
+      { id: "b", label: "Button 2", shortLabel: "B2", category: "face" },
+      { id: "c", label: "Button 3", shortLabel: "B3", category: "face" },
+      { id: "x", label: "Button 4", shortLabel: "B4", category: "face" },
+      { id: "y", label: "Button 5", shortLabel: "B5", category: "face" },
+      { id: "z", label: "Button 6", shortLabel: "B6", category: "face" },
+      { id: "mode", label: "Insert Coin", shortLabel: "COIN", category: "system" },
+      { id: "start", label: "Player Start", shortLabel: "START", category: "system" },
+    ];
+  }
+
+  // Default: Sega Genesis / Mega Drive / Sega CD / Sega 32X
+  return [
+    ...dpad,
+    { id: "a", label: "A Button", shortLabel: "A", category: "face" },
+    { id: "b", label: "B Button", shortLabel: "B", category: "face" },
+    { id: "c", label: "C Button", shortLabel: "C", category: "face" },
+    { id: "x", label: "X Button", shortLabel: "X", category: "face" },
+    { id: "y", label: "Y Button", shortLabel: "Y", category: "face" },
+    { id: "z", label: "Z Button", shortLabel: "Z", category: "face" },
+    { id: "mode", label: "Mode", shortLabel: "MODE", category: "system" },
+    { id: "start", label: "Start", shortLabel: "START", category: "system" },
+  ];
+}
+
 // Action definitions for Player 1
 export const GAME_ACTIONS: Record<string, GameAction> = {
   up:    { key: "ArrowUp",    keyCode: 38, code: "ArrowUp",    label: "D-Pad Up" },
@@ -383,8 +569,48 @@ export function assignGamepadBinding(
   return updated;
 }
 
+/**
+ * Converts a mouse button index (0..4) into a persistent binding token.
+ */
+export function mouseButtonToToken(button: number): string {
+  switch (button) {
+    case 0:
+      return "Mouse0";
+    case 1:
+      return "Mouse1";
+    case 2:
+      return "Mouse2";
+    case 3:
+      return "Mouse3";
+    case 4:
+      return "Mouse4";
+    default:
+      return `Mouse${button}`;
+  }
+}
+
+/**
+ * Returns true if the key binding token represents a mouse button.
+ */
+export function isMouseBinding(key: string): boolean {
+  return /^mouse[0-9]+$/i.test((key || "").trim());
+}
+
 export function formatKeyLabel(key: string): string {
   if (!key) return "—";
+  const trimmed = key.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Mouse button tokens
+  if (lower === "mouse0") return "Mouse Left";
+  if (lower === "mouse1") return "Mouse Mid";
+  if (lower === "mouse2") return "Mouse Right";
+  if (lower === "mouse3") return "Mouse 4";
+  if (lower === "mouse4") return "Mouse 5";
+  if (lower.startsWith("mouse")) {
+    return `Mouse ${lower.replace("mouse", "")}`;
+  }
+
   if (key === " ") return "Space";
   if (key === "ArrowUp") return "▲ Up Arrow";
   if (key === "ArrowDown") return "▼ Down Arrow";
@@ -439,7 +665,7 @@ export const ANALOG_STICK_IDS: Record<string, number> = {
 };
 
 // Maps action name to RetroPad button index according to the active console core
-export function getCoreActionToButtonId(core: string): Record<string, number> {
+export function getCoreActionToButtonId(core?: string): Record<string, number> {
   const normCore = (core || "segaMD").toLowerCase();
 
   if (normCore === "psx") {
@@ -468,7 +694,31 @@ export function getCoreActionToButtonId(core: string): Record<string, number> {
     };
   }
 
-  if (normCore === "snes") {
+  if (normCore === "psp") {
+    return {
+      cross: 0,
+      b: 0,
+      square: 1,
+      y: 1,
+      select: 2,
+      mode: 2,
+      start: 3,
+      up: 4,
+      down: 5,
+      left: 6,
+      right: 7,
+      circle: 8,
+      a: 8,
+      triangle: 9,
+      x: 9,
+      l: 10,
+      l1: 10,
+      r: 11,
+      r1: 11,
+    };
+  }
+
+  if (normCore === "snes" || normCore === "nds") {
     return {
       b: 0,
       y: 1,
@@ -526,6 +776,52 @@ export function getCoreActionToButtonId(core: string): Record<string, number> {
       "c-down": 18,
       "c-left": 17,
       "c-right": 16,
+    };
+  }
+
+  if (normCore === "segams" || normCore === "segagg") {
+    return {
+      b: 0,
+      a: 8,
+      select: 2,
+      mode: 2,
+      start: 3,
+      up: 4,
+      down: 5,
+      left: 6,
+      right: 7,
+    };
+  }
+
+  if (normCore === "atari2600" || normCore === "atari") {
+    return {
+      b: 0,
+      a: 0,
+      mode: 2,
+      select: 2,
+      start: 3,
+      up: 4,
+      down: 5,
+      left: 6,
+      right: 7,
+    };
+  }
+
+  if (normCore === "arcade" || normCore === "mame" || normCore === "fbneo") {
+    return {
+      b: 0,
+      a: 1,
+      mode: 2,
+      select: 2,
+      start: 3,
+      up: 4,
+      down: 5,
+      left: 6,
+      right: 7,
+      c: 8,
+      y: 9,
+      x: 10,
+      z: 11,
     };
   }
 
@@ -661,6 +957,7 @@ export function syncEmulatorJSControls(
   if (!ejsControls || !ejsControls[port]) return;
 
   for (const [action, key] of Object.entries(mapping)) {
+    if (isMouseBinding(key)) continue;
     const btnId = actionMap[action.toLowerCase()];
     if (btnId !== undefined && key) {
       const code = keyNameToKeyCode(key);

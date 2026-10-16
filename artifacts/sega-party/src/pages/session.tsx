@@ -15,7 +15,15 @@ import {
   type ChatMessage,
   type ParticipantInfo,
 } from "@/lib/webrtc";
-import { getPlayerActionKey, simulateEmulatorInput, loadPlayerKeyboardMapping } from "@/lib/gamepadMapping";
+import {
+  getPlayerActionKey,
+  simulateEmulatorInput,
+  loadPlayerKeyboardMapping,
+  formatKeyLabel,
+  getConsoleActions,
+  mouseButtonToToken,
+  isMouseBinding,
+} from "@/lib/gamepadMapping";
 import { useGamepad } from "@/hooks/useGamepad";
 
 import { ControlsModal } from "@/components/ControlsModal";
@@ -1042,7 +1050,7 @@ export default function SessionPage() {
     [code],
   );
 
-  // Keyboard input forwarding for assigned player slots
+  // Keyboard & Mouse input forwarding for assigned player slots
   useEffect(() => {
     const activeSlot = effectiveSlot;
 
@@ -1054,6 +1062,8 @@ export default function SessionPage() {
       if (key.length === 1) {
         activeKeyMap[key.toLowerCase()] = action;
         activeKeyMap[key.toUpperCase()] = action;
+      } else {
+        activeKeyMap[key.toLowerCase()] = action;
       }
     }
 
@@ -1071,7 +1081,7 @@ export default function SessionPage() {
             (activeEl as HTMLInputElement).type !== "checkbox"));
       if (isTextEntry) return;
 
-      const action = activeKeyMap[e.key];
+      const action = activeKeyMap[e.key] || activeKeyMap[e.key.toLowerCase()];
       if (!action) return;
 
       e.preventDefault();
@@ -1094,14 +1104,69 @@ export default function SessionPage() {
       });
     };
 
+    const forwardMouse = (e: MouseEvent, type: "mousedown" | "mouseup") => {
+      const targetEl = e.target as HTMLElement | null;
+      if (
+        targetEl &&
+        (targetEl.tagName === "BUTTON" ||
+          targetEl.tagName === "INPUT" ||
+          targetEl.tagName === "SELECT" ||
+          targetEl.tagName === "TEXTAREA" ||
+          targetEl.closest("button") ||
+          targetEl.closest("[role='dialog']") ||
+          targetEl.closest("[role='menu']"))
+      ) {
+        return;
+      }
+
+      const stageEl = videoContainerRef.current;
+      if (!stageEl || !stageEl.contains(targetEl)) {
+        return;
+      }
+
+      const mouseToken = mouseButtonToToken(e.button).toLowerCase();
+      const action = activeKeyMap[mouseToken] || activeKeyMap[mouseButtonToToken(e.button)];
+      if (!action) return;
+
+      e.preventDefault();
+      handleButtonActivity(action, type === "mousedown");
+
+      handleInputEvent({
+        type: type === "mousedown" ? "keydown" : "keyup",
+        playerIndex: activeSlot,
+        action,
+        key: mouseToken,
+        keyCode: 0,
+        code: mouseToken,
+      });
+    };
+
     const onKeyDown = (e: KeyboardEvent) => forwardKey(e, "keydown");
     const onKeyUp = (e: KeyboardEvent) => forwardKey(e, "keyup");
+    const onMouseDown = (e: MouseEvent) => forwardMouse(e, "mousedown");
+    const onMouseUp = (e: MouseEvent) => forwardMouse(e, "mouseup");
+    const onContextMenu = (e: MouseEvent) => {
+      const mouseToken = mouseButtonToToken(2).toLowerCase();
+      const action = activeKeyMap[mouseToken] || activeKeyMap["Mouse2"] || activeKeyMap["mouse2"];
+      if (action) {
+        const stageEl = videoContainerRef.current;
+        if (stageEl && stageEl.contains(e.target as Node)) {
+          e.preventDefault();
+        }
+      }
+    };
 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("contextmenu", onContextMenu);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("contextmenu", onContextMenu);
     };
   }, [effectiveSlot, isHost, keyboardMapping, handleInputEvent, handleButtonActivity]);
 
@@ -1337,14 +1402,15 @@ export default function SessionPage() {
           {/* Controls Setup */}
           <Button
             size="sm"
-            variant="default"
             onClick={() => {
               setControlsSlot(effectiveSlot);
               setControlsOpen(true);
             }}
-            className="h-7 px-2.5 text-xs font-sans bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-sm shadow-primary/40 gap-1.5"
+            className="h-7 px-3 text-xs font-sans bg-gradient-to-r from-primary via-indigo-600 to-primary hover:from-primary/90 hover:to-indigo-500 text-primary-foreground font-bold shadow-[0_0_12px_rgba(0,140,255,0.4)] hover:shadow-[0_0_18px_rgba(0,140,255,0.7)] hover:scale-[1.02] transition-all gap-1.5 border border-primary/50"
+            title={`Configure ${consoleSys.name} controller and keybinds for Player ${effectiveSlot}`}
           >
-            <Wand2 className="w-3.5 h-3.5 text-accent animate-pulse" /> Controls Wizard
+            <Gamepad2 className="w-3.5 h-3.5 text-accent animate-pulse" />
+            <span>{consoleSys.shortName} Keybinds &amp; Controller (P{effectiveSlot})</span>
           </Button>
         </div>
       </header>
@@ -1642,19 +1708,18 @@ export default function SessionPage() {
 
             {/* Glowing Pill Badges: ICE Connection Orb & Quick Remap Button */}
             <div className="flex items-center gap-2 shrink-0">
-              {/* Quick Remap Controls Button */}
+              {/* Easy-to-Find Console-Aware Keybind Button */}
               <Button
                 size="sm"
-                variant="default"
                 onClick={() => {
                   setControlsSlot(effectiveSlot);
                   setControlsOpen(true);
                 }}
-                className="h-7 px-2.5 text-xs font-sans bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-primary-foreground font-bold shadow-[0_0_12px_rgba(0,180,255,0.4)] gap-1.5 animate-pulse hover:animate-none hover:scale-105 transition-all"
-                title={`Configure & Test Controls for Player ${effectiveSlot}`}
+                className="h-7 px-3 text-xs font-sans bg-gradient-to-r from-cyan-500 via-primary to-amber-500 hover:from-cyan-400 hover:via-primary/90 hover:to-amber-400 text-white font-extrabold shadow-[0_0_15px_rgba(0,190,255,0.6)] hover:shadow-[0_0_22px_rgba(0,220,255,0.9)] hover:scale-[1.03] transition-all gap-1.5 border border-white/30 rounded-full"
+                title={`Configure & Test ${consoleSys.name} Controls for Player ${effectiveSlot}`}
               >
-                <Gamepad2 className="w-3.5 h-3.5 text-yellow-300" />
-                <span>Remap Controls (P{effectiveSlot})</span>
+                <Gamepad2 className="w-3.5 h-3.5 text-yellow-300 animate-pulse" />
+                <span>{consoleSys.shortName} Keybinds &amp; Controller (P{effectiveSlot})</span>
               </Button>
 
               {/* ICE Connection Status Orb */}
@@ -1729,6 +1794,85 @@ export default function SessionPage() {
             </div>
           </div>
 
+          {/* Live In-Game Button Light-Up HUD Bar */}
+          <div className="w-full max-w-4xl mx-auto rounded-xl p-2 sm:p-2.5 bg-neutral-950/85 border border-neutral-800/80 shadow-[0_4px_20px_rgba(0,0,0,0.5)] backdrop-blur-sm space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs font-sans">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                </span>
+                <span className="text-[11px] font-mono font-bold text-foreground truncate">
+                  {consoleSys.name} Controller · <span className="text-primary font-black">P{effectiveSlot}</span>
+                </span>
+                <Badge variant="outline" className={cn("text-[9px] font-bold py-0 px-1.5 uppercase", consoleSys.badgeColor)}>
+                  {consoleSys.shortName}
+                </Badge>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground font-mono hidden sm:inline">
+                  Click button to rebind:
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setControlsSlot(effectiveSlot);
+                    setControlsOpen(true);
+                  }}
+                  className="h-6 text-[10px] px-2 border-primary/40 text-primary hover:bg-primary/20 flex items-center gap-1 font-bold rounded-lg"
+                  title={`Open Keybind Wizard for Player ${effectiveSlot}`}
+                >
+                  <Wand2 className="w-2.5 h-2.5 text-accent animate-pulse" />
+                  <span>Set Up / Wizard</span>
+                </Button>
+              </div>
+            </div>
+
+            {/* Row of interactive mini controller buttons */}
+            <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 p-1.5 bg-black/60 rounded-lg border border-white/5 overflow-x-auto">
+              {getConsoleActions(activeCore).map((act) => {
+                const isDown = activeButtons.has(act.id);
+                const boundKey = keyboardMapping[act.id] || "";
+                return (
+                  <button
+                    key={act.id}
+                    type="button"
+                    onClick={() => {
+                      setControlsSlot(effectiveSlot);
+                      setControlsOpen(true);
+                    }}
+                    title={`${act.label}: bound to [${formatKeyLabel(boundKey)}] · Click to rebind`}
+                    className={cn(
+                      "flex flex-col items-center justify-center min-w-[34px] sm:min-w-[40px] px-1 py-1 rounded-md text-center transition-all duration-75 select-none cursor-pointer border",
+                      isDown
+                        ? "bg-emerald-400 text-black border-emerald-300 shadow-[0_0_15px_rgba(52,211,153,0.9)] scale-110 font-black z-10"
+                        : "bg-neutral-900/90 text-neutral-300 border-white/10 hover:border-primary/50 hover:bg-neutral-800"
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "text-[10px] sm:text-[11px] font-black leading-tight",
+                        isDown ? "text-black" : "text-foreground"
+                      )}
+                    >
+                      {act.shortLabel || act.label}
+                    </span>
+                    <span
+                      className={cn(
+                        "text-[8px] sm:text-[9px] font-mono leading-none truncate max-w-[48px]",
+                        isDown ? "text-neutral-900 font-bold" : "text-muted-foreground"
+                      )}
+                    >
+                      {formatKeyLabel(boundKey)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Multi-Player Controller Slots Bar */}
           <ControllerSlots
             slots={slots}
@@ -1782,6 +1926,20 @@ export default function SessionPage() {
         activeCore={activeCore}
         playerSlot={controlsSlot || effectiveSlot}
         isHost={isHost}
+        {...({
+          onTestInput: (action: string, isDown: boolean) => {
+            const targetSlot = controlsSlot || effectiveSlot;
+            handleButtonActivity(action, isDown);
+            handleInputEvent({
+              type: isDown ? "keydown" : "keyup",
+              playerIndex: targetSlot,
+              action,
+              key: action,
+              keyCode: 0,
+              code: action,
+            });
+          },
+        } as Record<string, unknown>)}
       />
 
       {/* Invite Friends & QR Code Modal */}
