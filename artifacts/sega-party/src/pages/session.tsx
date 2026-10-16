@@ -51,6 +51,8 @@ import {
   Sparkles,
   FolderOpen,
   Loader2,
+  Disc,
+  Zap,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -1380,27 +1382,52 @@ export default function SessionPage() {
       <main className="flex-1 w-full max-w-7xl mx-auto p-3 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left / Center Column: Stage & Controller Slots (8 cols) */}
         <div className="lg:col-span-8 flex flex-col space-y-4">
-          {/* Game Stage */}
-          <div className="w-full relative">
+          {/* Arcade Cinema Stream Deck */}
+          <div className="w-full max-w-4xl mx-auto rounded-2xl p-2.5 sm:p-3.5 bg-gradient-to-b from-neutral-800 via-neutral-900 to-black border-2 border-neutral-700/80 shadow-[0_20px_50px_rgba(0,0,0,0.85),0_0_35px_rgba(0,140,255,0.2)] ring-1 ring-white/10 relative group">
             {isHost ? (
               isReloadingRom ? (
-                <div className="w-full aspect-[4/3] max-w-4xl mx-auto bg-black border-4 border-primary/50 rounded-lg flex flex-col items-center justify-center p-6 text-center space-y-3">
+                <div className="w-full aspect-[4/3] bg-black rounded-xl border border-neutral-800 flex flex-col items-center justify-center p-6 text-center space-y-3">
                   <Loader2 className="w-8 h-8 text-primary animate-spin" />
                   <p className="text-primary font-display text-lg tracking-wide">Switching Games...</p>
                   <p className="text-muted-foreground text-xs font-sans">Cleaning up previous console memory and preparing new system...</p>
                 </div>
               ) : romUrl ? (
-                <Emulator
-                  key={`${romUrl}-${activeCore}`}
-                  romUrl={romUrl}
-                  core={activeCore}
-                  onStreamReady={handleStreamReady}
-                  onAudioTrackAdded={handleAudioTrackAdded}
-                  onVideoFrame={handleVideoFrame}
-                  onAudioChunk={handleAudioChunk}
-                />
+                <div ref={videoContainerRef} className="w-full relative rounded-xl overflow-hidden">
+                  <Emulator
+                    key={`${romUrl}-${activeCore}`}
+                    romUrl={romUrl}
+                    core={activeCore}
+                    onStreamReady={handleStreamReady}
+                    onAudioTrackAdded={handleAudioTrackAdded}
+                    onVideoFrame={handleVideoFrame}
+                    onAudioChunk={handleAudioChunk}
+                  />
+                  {/* Floating Frosted Glass In-Stream Controls Overlay (Host) */}
+                  <div className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-20 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={toggleFullscreen}
+                      className="w-7 h-7 text-muted-foreground hover:text-foreground hover:bg-white/10 rounded-lg"
+                      title="Fullscreen"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </Button>
+                    <div className="w-px h-4 bg-white/10" />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setRomPickerOpen(true)}
+                      className="h-7 px-2.5 text-xs font-sans font-bold text-amber-400 hover:text-amber-300 hover:bg-amber-400/10 flex items-center gap-1.5 rounded-lg border border-amber-500/30 shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+                      title="Eject / Switch Game ROM Cartridge"
+                    >
+                      <Disc className="w-3.5 h-3.5 animate-spin" />
+                      <span>Eject</span>
+                    </Button>
+                  </div>
+                </div>
               ) : (
-                <div className="w-full aspect-video bg-black border-4 border-destructive/50 rounded-lg flex flex-col items-center justify-center p-6 text-center space-y-3">
+                <div className="w-full aspect-video bg-black rounded-xl border border-destructive/50 flex flex-col items-center justify-center p-6 text-center space-y-3">
                   <p className="text-destructive font-display text-lg">No ROM loaded in memory.</p>
                   <Button onClick={() => setRomPickerOpen(true)} className="bg-primary text-primary-foreground font-bold">
                     Pick ROM File from PC
@@ -1419,7 +1446,7 @@ export default function SessionPage() {
                     unlockAudio();
                   }
                 }}
-                className="w-full aspect-[4/3] max-w-4xl mx-auto bg-black border-4 border-primary rounded-lg shadow-[0_0_30px_rgba(0,71,187,0.4)] relative overflow-hidden group flex items-center justify-center cursor-pointer"
+                className="w-full aspect-[4/3] bg-black rounded-xl overflow-hidden relative flex items-center justify-center cursor-pointer border border-neutral-800"
               >
                 {(remoteStream || hasWsStream) ? (
                   <>
@@ -1480,52 +1507,87 @@ export default function SessionPage() {
                       </div>
                     )}
 
-                    {/* Guest Stream Controls Overlay */}
-                    <div className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/80 p-1.5 rounded-lg border border-primary/30 opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => {
-                          const next = !isMuted;
-                          setIsMuted(next);
-                          isMutedRef.current = next;
-                          if (!next) {
-                            unlockAudio();
-                          }
-                        }}
-                        className="w-7 h-7 text-muted-foreground hover:text-foreground"
-                        title={isMuted ? "Unmute Game Audio" : "Mute Game Audio"}
-                      >
-                        {isMuted ? <VolumeX className="w-4 h-4 text-destructive" /> : <Volume2 className="w-4 h-4 text-green-400" />}
-                      </Button>
+                    {/* Floating Frosted Glass In-Stream Controls Overlay (Guest) */}
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-20 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                    >
+                      {/* Volume Slider with Animated Speaker Wave */}
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => {
+                            const next = !isMuted;
+                            setIsMuted(next);
+                            isMutedRef.current = next;
+                            if (!next) {
+                              unlockAudio();
+                            }
+                          }}
+                          className="w-7 h-7 text-muted-foreground hover:text-foreground hover:bg-white/10 rounded-lg"
+                          title={isMuted ? "Unmute Game Audio" : "Mute Game Audio"}
+                        >
+                          {isMuted ? (
+                            <VolumeX className="w-4 h-4 text-destructive" />
+                          ) : (
+                            <Volume2 className="w-4 h-4 text-emerald-400 animate-pulse" />
+                          )}
+                        </Button>
 
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={volume}
-                        onChange={(e) => setVolume(parseFloat(e.target.value))}
-                        className="w-16 h-1 accent-primary cursor-pointer"
-                        title={`Volume: ${Math.round(volume * 100)}%`}
-                      />
+                        {!isMuted && volume > 0 && (
+                          <div className="flex items-end gap-0.5 h-3 px-0.5" title={`Audio Playing (${Math.round(volume * 100)}%)`}>
+                            <span className="w-0.5 h-1.5 bg-emerald-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                            <span className="w-0.5 h-3 bg-emerald-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                            <span className="w-0.5 h-2 bg-emerald-400 rounded-full animate-bounce [animation-delay:-0.45s]" />
+                          </div>
+                        )}
 
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.05"
+                          value={isMuted ? 0 : volume}
+                          onChange={(e) => {
+                            const newVol = parseFloat(e.target.value);
+                            setVolume(newVol);
+                            if (isMuted && newVol > 0) {
+                              setIsMuted(false);
+                              isMutedRef.current = false;
+                              unlockAudio();
+                            }
+                          }}
+                          className="w-16 sm:w-20 h-1.5 accent-primary bg-neutral-700 rounded-lg cursor-pointer"
+                          title={`Volume: ${isMuted ? 0 : Math.round(volume * 100)}%`}
+                        />
+                      </div>
+
+                      <div className="w-px h-4 bg-white/10" />
+
+                      {/* CRT Scanline Toggle */}
                       <Button
                         size="icon"
                         variant="ghost"
                         onClick={() => setCrtFilter(!crtFilter)}
-                        className={`w-7 h-7 ${crtFilter ? "text-accent" : "text-muted-foreground hover:text-foreground"}`}
-                        title="Toggle CRT Scanline Effect"
+                        className={cn(
+                          "w-7 h-7 rounded-lg transition-colors",
+                          crtFilter
+                            ? "bg-accent/20 text-accent border border-accent/40 shadow-[0_0_10px_rgba(255,200,0,0.3)]"
+                            : "text-muted-foreground hover:text-foreground hover:bg-white/10"
+                        )}
+                        title={crtFilter ? "Disable CRT Scanlines" : "Enable CRT Scanlines"}
                       >
                         <Tv className="w-3.5 h-3.5" />
                       </Button>
 
+                      {/* Fullscreen Toggle */}
                       <Button
                         size="icon"
                         variant="ghost"
                         onClick={toggleFullscreen}
-                        className="w-7 h-7 text-muted-foreground hover:text-foreground"
-                        title="Fullscreen"
+                        className="w-7 h-7 text-muted-foreground hover:text-foreground hover:bg-white/10 rounded-lg"
+                        title="Toggle Fullscreen"
                       >
                         <Maximize2 className="w-3.5 h-3.5" />
                       </Button>
@@ -1569,29 +1631,97 @@ export default function SessionPage() {
             )}
           </div>
 
-          {/* Active ROM Info & Stream status */}
-          <div className="flex items-center justify-between px-2 text-xs font-sans text-muted-foreground">
-            <div className="flex items-center gap-2 truncate">
-              <span className="font-bold text-foreground uppercase">Now Playing:</span>
-              <Badge variant="outline" className={cn("text-[10px] font-bold py-0 px-1.5 uppercase", consoleSys.badgeColor)}>
+          {/* Cyberpunk Live Telemetry HUD */}
+          <div className="w-full max-w-4xl mx-auto flex flex-wrap items-center justify-between gap-3 px-2 py-1 text-xs font-sans">
+            {/* Active ROM Info & Console System */}
+            <div className="flex items-center gap-2 min-w-0 max-w-full sm:max-w-[55%]">
+              <span className="text-[10px] font-mono tracking-widest text-muted-foreground/80 uppercase font-semibold shrink-0">
+                CARTRIDGE:
+              </span>
+              <Badge
+                variant="outline"
+                className={cn(
+                  "text-[10px] font-mono font-bold py-0.5 px-2 uppercase rounded-full shadow-[0_0_10px_rgba(0,140,255,0.25)] shrink-0",
+                  consoleSys.badgeColor
+                )}
+              >
                 {consoleSys.shortName}
               </Badge>
-              <span className="text-primary font-mono truncate">{activeRomName || `${consoleSys.name} Game`}</span>
+              <span className="font-mono text-xs font-bold text-foreground truncate" title={activeRomName || `${consoleSys.name} Game`}>
+                {activeRomName || `${consoleSys.name} Game`}
+              </span>
             </div>
 
-            <div className="flex items-center gap-2 text-[11px] uppercase font-bold">
+            {/* Glowing Pill Badges: ICE Connection Orb & Real-time Stream Mode */}
+            <div className="flex items-center gap-2 shrink-0">
+              {/* ICE Connection Status Orb */}
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-neutral-900/90 border border-neutral-700/60 shadow-sm text-[11px] font-mono">
+                {isHost ? (
+                  <>
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+                    </span>
+                    <span className="text-neutral-400 uppercase text-[10px] font-semibold">ICE:</span>
+                    <span className="text-emerald-400 font-bold text-[10px]">HOST</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="relative flex h-2 w-2">
+                      {webrtcStatus.ice === "connected" || webrtcStatus.ice === "completed" ? (
+                        <>
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+                        </>
+                      ) : webrtcStatus.ice === "checking" ? (
+                        <>
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)]" />
+                        </>
+                      ) : (
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)] animate-pulse" />
+                      )}
+                    </span>
+                    <span className="text-neutral-400 uppercase text-[10px] font-semibold">ICE:</span>
+                    <span
+                      className={cn(
+                        "font-bold text-[10px] uppercase",
+                        webrtcStatus.ice === "connected" || webrtcStatus.ice === "completed"
+                          ? "text-emerald-400"
+                          : webrtcStatus.ice === "checking"
+                          ? "text-amber-400"
+                          : "text-rose-400"
+                      )}
+                    >
+                      {webrtcStatus.ice}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {/* Real-time Stream Mode Badge */}
               {isHost ? (
-                <span className="text-primary flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5 text-accent" /> Hosting Room
-                </span>
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/50 border border-emerald-500/40 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.3)] text-[10px] font-mono font-bold tracking-wide">
+                  <Zap className="w-3 h-3 text-emerald-400 fill-emerald-400 animate-pulse" />
+                  <span>60 FPS Host Master</span>
+                </div>
               ) : connectionStatus === "connected" ? (
-                <span className="text-green-400 flex items-center gap-1">
-                  <Wifi className="w-3.5 h-3.5" /> 60 FPS Stereo
-                </span>
+                hasWsStream && !rtcVideoActive ? (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-950/50 border border-amber-500/40 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.3)] text-[10px] font-mono font-bold tracking-wide">
+                    <Wifi className="w-3 h-3 text-amber-400 animate-pulse" />
+                    <span>15 FPS Dual-Sync</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/50 border border-emerald-500/40 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.3)] text-[10px] font-mono font-bold tracking-wide">
+                    <Wifi className="w-3 h-3 text-emerald-400 animate-pulse" />
+                    <span>60 FPS WebRTC</span>
+                  </div>
+                )
               ) : (
-                <span className="text-muted-foreground flex items-center gap-1 animate-pulse">
-                  <WifiOff className="w-3.5 h-3.5" /> Connecting...
-                </span>
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-neutral-900/80 border border-neutral-700/60 text-muted-foreground text-[10px] font-mono font-semibold animate-pulse">
+                  <WifiOff className="w-3 h-3 text-neutral-400" />
+                  <span>CONNECTING...</span>
+                </div>
               )}
             </div>
           </div>
