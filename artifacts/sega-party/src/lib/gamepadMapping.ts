@@ -189,10 +189,10 @@ export const EJS_ACTION_TO_BUTTON_ID: Record<string, number> = {
  * Returns true when direct C-core input succeeded, or false when it fell back to KeyboardEvent.
  */
 export function simulateEmulatorInput(playerIndex: number, action: string, isDown: boolean): boolean {
-  const port = Math.max(0, Math.min(3, (playerIndex || 1) - 1));
-  const normAction = (action || "").toLowerCase();
+  const normAction = (action?.toLowerCase?.() || "").trim();
+  const port = Math.max(0, Math.min(3, (Number(playerIndex) || 1) - 1));
 
-  const ejs = (window as unknown as {
+  const win = window as unknown as {
     EJS_emulator?: {
       gameManager?: {
         simulateInput?: (player: number, index: number, value: number) => void;
@@ -200,14 +200,41 @@ export function simulateEmulatorInput(playerIndex: number, action: string, isDow
       };
       elements?: { parent?: HTMLElement };
     };
-  }).EJS_emulator;
+    __lastSimulatedInput?: {
+      port: number;
+      playerIndex: number;
+      action: string;
+      btnId: number | undefined;
+      isDown: boolean;
+      timestamp: number;
+    };
+  };
 
   const btnId = EJS_ACTION_TO_BUTTON_ID[normAction];
-  const simFn = ejs?.gameManager?.simulateInput || ejs?.gameManager?.functions?.simulateInput;
-  if (simFn && btnId !== undefined) {
+
+  // Store debug diagnostic on window for E2E tests and debugging
+  try {
+    win.__lastSimulatedInput = {
+      port,
+      playerIndex,
+      action: normAction,
+      btnId,
+      isDown,
+      timestamp: Date.now(),
+    };
+  } catch {}
+
+  const gm = win.EJS_emulator?.gameManager;
+  if (btnId !== undefined && gm) {
     try {
-      simFn.call(ejs?.gameManager, port, btnId, isDown ? 1 : 0);
-      return true;
+      if (typeof gm.functions?.simulateInput === "function") {
+        gm.functions.simulateInput(port, btnId, isDown ? 1 : 0);
+        return true;
+      }
+      if (typeof gm.simulateInput === "function") {
+        gm.simulateInput(port, btnId, isDown ? 1 : 0);
+        return true;
+      }
     } catch {}
   }
 
@@ -215,7 +242,7 @@ export function simulateEmulatorInput(playerIndex: number, action: string, isDow
   const keyAction = getPlayerActionKey(playerIndex, normAction);
   if (!keyAction) return false;
 
-  const target = ejs?.elements?.parent || document.getElementById("game") || window;
+  const target = win.EJS_emulator?.elements?.parent || document.getElementById("game") || window;
   const eventType = isDown ? "keydown" : "keyup";
   const event = new KeyboardEvent(eventType, {
     key: keyAction.key,

@@ -17,7 +17,7 @@ export function getStoredPlayerId(code: string): string {
 
 export function getStoredPlayerName(code: string): string {
   const upper = code.toUpperCase();
-  return sessionStorage.getItem(`playerName_${upper}`) || sessionStorage.getItem("playerName") || "";
+  return sessionStorage.getItem(`playerName_${upper}`) || "";
 }
 
 export function setStoredPlayerIdentity(code: string, playerId: string, playerName: string): void {
@@ -67,7 +67,7 @@ export type SignalMessage =
   | { type: "chat"; id?: string; sessionCode?: string; senderId?: string; senderName?: string; text: string; timestamp?: number; isSystem?: boolean }
   | { type: "rom-change"; sessionCode: string; romName: string }
   | { type: "rom-info"; romName: string }
-  | { type: "signal"; sessionCode: string; targetPeerId: string; data: unknown; fromPeerId?: string }
+  | { type: "signal"; sessionCode: string; targetPeerId: string; data: unknown; fromPeerId?: string; isRenegotiation?: boolean }
   | { type: "voice-signal"; sessionCode: string; targetPeerId: string; data: unknown; fromPeerId?: string }
   | { type: "leave"; sessionCode: string; peerId: string }
   | { type: "host-info"; hostPeerId: string }

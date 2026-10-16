@@ -19,10 +19,15 @@ declare global {
     EJS_startOnLoaded: boolean;
     EJS_defaultControls?: Record<number, Record<number, { value: string; value2?: string }>>;
     EJS_onGameStart: () => void;
+    EJS_disableDatabases?: boolean;
+    EJS_disableLocalStorage?: boolean;
+    EJS_defaultOptions?: Record<string, string>;
     __emulatorAudioStream?: MediaStream | null;
     __onEmulatorAudioChunk?: (pcmBase64: string, sampleRate: number) => void;
   }
 }
+
+export type EjsWindow = Window;
 
 // Hook WebGL getContext to enforce preserveDrawingBuffer: true so direct canvas.captureStream
 // and canvas.toDataURL work reliably without black/flickering frames.
@@ -200,6 +205,15 @@ export function Emulator({
     } catch {}
     delete (window as unknown as { EJS_emulator?: unknown }).EJS_emulator;
 
+    // Clear any cached ejs- localStorage keys and delete EmulatorJS IndexedDB databases on mount
+    try {
+      Object.keys(localStorage).forEach((k) => {
+        if (k.startsWith("ejs-")) localStorage.removeItem(k);
+      });
+      window.indexedDB?.deleteDatabase?.("EmulatorJS-roms");
+      window.indexedDB?.deleteDatabase?.("EmulatorJS-states");
+    } catch {}
+
     // Reset audio stream reference for fresh capture
     if (window.__emulatorAudioStream) {
       window.__emulatorAudioStream.getTracks().forEach((t) => t.stop());
@@ -213,6 +227,12 @@ export function Emulator({
     window.EJS_gameUrl = romUrl;
     window.EJS_pathtodata = "/emulatorjs/";
     window.EJS_startOnLoaded = true;
+    window.EJS_disableDatabases = true;
+    window.EJS_disableLocalStorage = true;
+    window.EJS_defaultOptions = {
+      "genesis_plus_gx_joypad_1": "6 button",
+      "genesis_plus_gx_joypad_2": "6 button",
+    };
 
     // Configure conflict-free default mappings aligned with RetroPad indices (0: B, 1: A, 8: C, 9: Y, 10: X, 11: Z)
     window.EJS_defaultControls = {
@@ -507,6 +527,13 @@ export function Emulator({
         }
       }
     }, 1000);
+
+    window.EJS_disableDatabases = true;
+    window.EJS_disableLocalStorage = true;
+    window.EJS_defaultOptions = {
+      "genesis_plus_gx_joypad_1": "6 button",
+      "genesis_plus_gx_joypad_2": "6 button",
+    };
 
     const script = document.createElement("script");
     script.src = "/emulatorjs/loader.js";

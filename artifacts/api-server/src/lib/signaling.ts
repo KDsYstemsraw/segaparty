@@ -56,6 +56,25 @@ function broadcastToRoom(room: RoomState, message: unknown, excludePeerId?: stri
   }
 }
 
+function cleanupStaleSlots(room: RoomState) {
+  for (const s of [1, 2, 3, 4]) {
+    const occupant = room.slots[s];
+    if (occupant) {
+      const peer = room.peers.get(occupant.peerId);
+      if (!peer || peer.ws.readyState !== WebSocket.OPEN) {
+        room.slots[s] = null;
+      }
+    }
+  }
+}
+
+function broadcastSlotState(room: RoomState) {
+  broadcastToRoom(room, {
+    type: "slot-state",
+    slots: room.slots,
+  });
+}
+
 export function attachSignalingServer(server: Server) {
   const wss = new WebSocketServer({ server, path: "/ws" });
 
@@ -95,21 +114,33 @@ export function attachSignalingServer(server: Server) {
         const room = getOrCreateRoom(sessionCode);
         if (romName) room.romName = romName;
 
+        cleanupStaleSlots(room);
+
         if (role === "host") {
           room.hostPeerId = peerId;
           // Auto-assign host to Slot 1 if empty or update peerId if host reconnected
-          if (!room.slots[1]) {
+          if (!room.slots[1] || room.slots[1].isHost || room.slots[1].playerName === playerName) {
             room.slots[1] = { peerId, playerName, isHost: true };
-          } else if (room.slots[1].isHost || room.slots[1].playerName === playerName) {
-            room.slots[1].peerId = peerId;
+          }
+          // Clear any other slot (2, 3, 4) that happens to have peerId
+          for (const s of [2, 3, 4]) {
+            if (room.slots[s]?.peerId === peerId) {
+              room.slots[s] = null;
+            }
           }
         } else if (role === "guest") {
           const hasSlot = Object.values(room.slots).some((s) => s?.peerId === peerId);
           if (!hasSlot) {
-            const guestSlots = [2, 3, 4, 1];
-            const freeSlot = guestSlots.find((s) => !room.slots[s]);
-            if (freeSlot !== undefined) {
-              room.slots[freeSlot] = { peerId, playerName, isHost: false };
+            const matchSlot = [2, 3, 4].find(
+              (s) => room.slots[s]?.playerName === playerName && !room.slots[s]?.isHost
+            );
+            if (matchSlot) {
+              room.slots[matchSlot] = { peerId, playerName, isHost: false };
+            } else {
+              const freeSlot = [2, 3, 4, 1].find((s) => !room.slots[s]);
+              if (freeSlot !== undefined) {
+                room.slots[freeSlot] = { peerId, playerName, isHost: false };
+              }
             }
           }
         }
@@ -246,7 +277,7 @@ export function attachSignalingServer(server: Server) {
         return;
       }
 
-      if (type === "slot-claim") {
+      if (type === "slot-claim" || type === "claim-slot") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
         const slot = Number(msg.slot); // 1, 2, 3, 4
         const effectivePeerId = (msg.peerId as string) || myPeerId;
@@ -259,6 +290,7 @@ export function attachSignalingServer(server: Server) {
         myPlayerName = effectivePlayerName;
 
         const room = getOrCreateRoom(sessionCode);
+        cleanupStaleSlots(room);
 
         // Check if slot is occupied by another peer
         const existing = room.slots[slot];
@@ -405,11 +437,44 @@ export function attachSignalingServer(server: Server) {
 
       if (type === "player-input") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
-        const input = msg.input;
         if (!sessionCode) return;
 
         const room = rooms.get(sessionCode);
-        if (!room || !room.hostPeerId) return;
+        if (!room || !room.hostPeerId || !myPeerId) return;
+
+        cleanupStaleSlots(room);
+
+        let ownedSlot: number | undefined;
+        for (const s of [1, 2, 3, 4]) {
+          if (room.slots[s]?.peerId === myPeerId) {
+            ownedSlot = s;
+            break;
+          }
+        }
+
+        if (!ownedSlot && myPeerId !== room.hostPeerId) {
+          const peerInfo = room.peers.get(myPeerId);
+          let freeSlot = [2, 3, 4, 1].find((s) => !room.slots[s]);
+          if (!freeSlot && !room.slots[2]?.isHost) {
+            freeSlot = 2;
+          }
+          if (freeSlot) {
+            room.slots[freeSlot] = {
+              peerId: myPeerId,
+              playerName: peerInfo?.playerName || "Player 2",
+              isHost: false,
+            };
+            ownedSlot = freeSlot;
+            broadcastSlotState(room);
+          }
+        }
+
+        const effectivePlayerIndex = ownedSlot || (myPeerId === room.hostPeerId ? 1 : 2);
+        const rawInput = (msg.input && typeof msg.input === "object") ? (msg.input as Record<string, unknown>) : {};
+        const sanitizedInput = {
+          ...rawInput,
+          playerIndex: myPeerId === room.hostPeerId ? (Number(rawInput.playerIndex) || 1) : effectivePlayerIndex,
+        };
 
         const hostPeer = room.peers.get(room.hostPeerId);
         if (hostPeer && hostPeer.ws.readyState === WebSocket.OPEN) {
@@ -417,7 +482,7 @@ export function attachSignalingServer(server: Server) {
             JSON.stringify({
               type: "player-input",
               fromPeerId: myPeerId,
-              input,
+              input: sanitizedInput,
             }),
           );
         }

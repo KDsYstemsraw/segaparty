@@ -147,6 +147,15 @@ class EJS_GameManager {
             "video_smooth = false\n" +
             "fastforward_ratio = 3.0\n" +
             "slowmotion_ratio = 3.0\n" +
+            "input_max_users = \"4\"\n" +
+            "input_libretro_device_p1 = \"1\"\n" +
+            "input_libretro_device_p2 = \"1\"\n" +
+            "input_libretro_device_p3 = \"1\"\n" +
+            "input_libretro_device_p4 = \"1\"\n" +
+            "input_player1_joypad_index = \"0\"\n" +
+            "input_player2_joypad_index = \"1\"\n" +
+            "input_player3_joypad_index = \"2\"\n" +
+            "input_player4_joypad_index = \"3\"\n" +
             (this.EJS.rewindEnabled ? "rewind_enable = true\n" : "") +
             (this.EJS.rewindEnabled ? "rewind_granularity = 6\n" : "") +
             "savefile_directory = \"/data/saves\"\n";

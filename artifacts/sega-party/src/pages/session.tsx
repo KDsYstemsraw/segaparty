@@ -134,6 +134,9 @@ export default function SessionPage() {
   const guestGainNodeRef = useRef<GainNode | null>(null);
 
 
+  const slotAssignmentsRef = useRef<SlotState>(slots);
+  slotAssignmentsRef.current = slots;
+
   const joinSession = useJoinSession();
 
   const { data: session, isLoading, isError, refetch } = useGetSession(code, {
@@ -145,7 +148,9 @@ export default function SessionPage() {
   });
 
   const romUrl = currentRomUrl || getRomUrl();
-  const isHost = !!session && !!myPlayerId && myPlayerId === session.hostId;
+  const isHost = Boolean(myPlayerId && session?.hostId && myPlayerId === session.hostId);
+  const isHostRef = useRef(isHost);
+  isHostRef.current = isHost;
 
   // Determine current user's slot number (1, 2, 3, 4 or null)
   const mySlot: number | null = (() => {
@@ -154,6 +159,7 @@ export default function SessionPage() {
     }
     return null;
   })();
+  const effectiveSlot = mySlot ?? (!isHost ? 2 : 1);
 
 
   // Prompt nickname modal if guest arrived via link without playerId or with stale playerId
@@ -180,16 +186,16 @@ export default function SessionPage() {
   // Route Gamepad & Virtual Gamepad Inputs
   const handleInputEvent = useCallback(
     (event: PlayerInputEvent) => {
-      if (isHost) {
+      if (isHost || isHostRef.current) {
         // Direct C-Core simulation (simulateEmulatorInput handles RetroArch joypad or falls back to KeyboardEvent)
         simulateEmulatorInput(event.playerIndex, event.action, event.type === "keydown");
       } else {
         // Guest sends over WebRTC Data Channel to Host if open
         if (guestDataChannelRef.current?.readyState === "open") {
           guestDataChannelRef.current.send(JSON.stringify(event));
-          return;
-        } else if (wsRef.current?.readyState === WebSocket.OPEN) {
-          // Dual-transport fallback: Send over WebSocket signaling relay only when DataChannel is not open
+        }
+        // Dual-transport: Always also send over WebSocket signaling relay if open
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(
             JSON.stringify({
               type: "player-input",
@@ -203,7 +209,7 @@ export default function SessionPage() {
     [code, isHost],
   );
 
-  useGamepad(mySlot, handleInputEvent, handleButtonActivity);
+  useGamepad(effectiveSlot, handleInputEvent, handleButtonActivity);
 
   // Send signaling helper
   const sendSignal = useCallback(
@@ -297,7 +303,14 @@ export default function SessionPage() {
         dc.onmessage = (e) => {
           try {
             const input = JSON.parse(e.data) as PlayerInputEvent;
-            simulateEmulatorInput(input.playerIndex, input.action, input.type === "keydown");
+            let guestSlot = Number(input.playerIndex) || 2;
+            for (const s of [1, 2, 3, 4]) {
+              if (slotAssignmentsRef.current[s]?.peerId === guestPeerId) {
+                guestSlot = s;
+                break;
+              }
+            }
+            simulateEmulatorInput(guestSlot, input.action, input.type === "keydown");
           } catch {}
         };
 
@@ -343,9 +356,12 @@ export default function SessionPage() {
         if (data.type === "offer" && !isHost) {
           setWebrtcStatus((prev) => ({ ...prev, lastSignal: "Received Offer" }));
           let pc = peerConnsRef.current.get(fromPeerId);
-          const isRenegotiation = !!pc;
+          const isRenegotiation = Boolean(data.isRenegotiation && pc && pc.signalingState !== "closed");
 
-          if (!pc) {
+          if (!isRenegotiation) {
+            if (pc) {
+              try { pc.close(); } catch {}
+            }
             pc = new RTCPeerConnection(RTC_CONFIG);
             peerConnsRef.current.set(fromPeerId, pc);
 
@@ -560,9 +576,17 @@ export default function SessionPage() {
           setConnectionStatus("connecting");
         }
 
-        if (msg.type === "player-input" && isHost && msg.input) {
+        if (
+          msg.type === "player-input" &&
+          (isHostRef.current || !!(window as unknown as { EJS_emulator?: unknown }).EJS_emulator) &&
+          msg.input
+        ) {
           const input = msg.input as PlayerInputEvent;
-          simulateEmulatorInput(input.playerIndex, input.action, input.type === "keydown");
+          simulateEmulatorInput(
+            input.playerIndex || 2,
+            input.action,
+            input.type === "keydown",
+          );
         }
 
         if (msg.type === "video-frame" && !isHost) {
@@ -711,7 +735,7 @@ export default function SessionPage() {
       dataChannelsRef.current.clear();
       iceCandidateQueueRef.current.clear();
     };
-  }, [code, isHost, myPlayerName, session?.code, wsReconnectTick, createHostOffer, handleSignal, toast]);
+  }, [code, session?.hostId, myPlayerId, myPlayerName, session?.code, wsReconnectTick, createHostOffer, handleSignal, toast]);
 
   // Bind remote stream to HTML5 video element with auto-recovery and onunmute handler
   useEffect(() => {
@@ -778,7 +802,11 @@ export default function SessionPage() {
           pc.addTrack(track, gameStreamRef.current!);
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
-          sendSignal(peerId, { type: "offer", sdp: pc.localDescription });
+          sendSignal(peerId, {
+            type: "offer",
+            sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp },
+            isRenegotiation: true,
+          });
         } catch {}
       });
     }
@@ -880,7 +908,7 @@ export default function SessionPage() {
 
   // Keyboard input forwarding for assigned player slots
   useEffect(() => {
-    if (!mySlot) return; // Spectators don't forward keyboard to game
+    const activeSlot = effectiveSlot;
 
     const KEY_ACTIONS_P1: Record<string, string> = {
       ArrowUp: "up",
@@ -904,6 +932,8 @@ export default function SessionPage() {
     };
 
     const KEY_ACTIONS_P2: Record<string, string> = {
+      w: "up",
+      W: "up",
       i: "up",
       I: "up",
       k: "down",
@@ -927,7 +957,7 @@ export default function SessionPage() {
 
     const actionMap = !isHost
       ? { ...KEY_ACTIONS_P2, ...KEY_ACTIONS_P1 }
-      : mySlot === 2
+      : activeSlot === 2
       ? KEY_ACTIONS_P2
       : KEY_ACTIONS_P1;
 
@@ -935,13 +965,15 @@ export default function SessionPage() {
       // Ignore synthetic events dispatched by handleInputEvent to prevent infinite loop
       if (!e.isTrusted) return;
 
-      // Don't intercept if user is typing in chat input
-      if (
-        document.activeElement?.tagName === "INPUT" ||
-        document.activeElement?.tagName === "TEXTAREA"
-      ) {
-        return;
-      }
+      const activeEl = document.activeElement as HTMLElement | null;
+      const isTextEntry =
+        activeEl &&
+        (activeEl.tagName === "TEXTAREA" ||
+          (activeEl.tagName === "INPUT" &&
+            (activeEl as HTMLInputElement).type !== "range" &&
+            (activeEl as HTMLInputElement).type !== "button" &&
+            (activeEl as HTMLInputElement).type !== "checkbox"));
+      if (isTextEntry) return;
 
       const action = actionMap[e.key];
       if (!action) return;
@@ -949,12 +981,12 @@ export default function SessionPage() {
       e.preventDefault();
       handleButtonActivity(action, type === "keydown");
 
-      const keyInfo = getPlayerActionKey(mySlot, action);
+      const keyInfo = getPlayerActionKey(activeSlot, action);
       if (!keyInfo) return;
 
       handleInputEvent({
         type,
-        playerIndex: mySlot,
+        playerIndex: activeSlot,
         action,
         key: keyInfo.key,
         keyCode: keyInfo.keyCode,
@@ -971,7 +1003,7 @@ export default function SessionPage() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [mySlot, isHost, handleInputEvent, handleButtonActivity]);
+  }, [effectiveSlot, isHost, handleInputEvent, handleButtonActivity]);
 
 
   const handleLoadRomFile = async (file: File) => {
@@ -1183,6 +1215,9 @@ export default function SessionPage() {
               <div
                 ref={videoContainerRef}
                 onClick={() => {
+                  if (document.activeElement instanceof HTMLElement && document.activeElement.tagName === "INPUT") {
+                    document.activeElement.blur();
+                  }
                   if (isMuted || audioBlocked) {
                     unlockAudio();
                   }
@@ -1376,7 +1411,7 @@ export default function SessionPage() {
           {showTouchGamepad && (
             <div className="mt-2">
               <TouchGamepad
-                playerSlot={mySlot}
+                playerSlot={effectiveSlot}
                 onInput={handleInputEvent}
                 onActivity={handleButtonActivity}
               />

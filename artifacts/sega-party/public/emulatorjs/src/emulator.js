@@ -2536,7 +2536,7 @@ class EmulatorJS {
                 { id: 17, label: this.localization("RIGHT D-PAD LEFT") },
                 { id: 16, label: this.localization("RIGHT D-PAD RIGHT") },
             ];
-        } else if (["segaCD", "sega32x"].includes(this.getControlScheme())) {
+        } else if (["segaMD", "segaCD", "sega32x"].includes(this.getControlScheme())) {
             buttons = [
                 { id: 1, label: this.localization("A") },
                 { id: 0, label: this.localization("B") },
@@ -4211,47 +4211,65 @@ class EmulatorJS {
         return "";
     }
     loadSettings() {
-        if (!window.localStorage || this.config.disableLocalStorage) return;
         this.settingsLoaded = true;
-        let ejs_settings = localStorage.getItem("ejs-settings");
-        let coreSpecific = localStorage.getItem(this.getLocalStorageKey());
-        if (coreSpecific) {
-            try {
-                coreSpecific = JSON.parse(coreSpecific);
-                if (!(coreSpecific.controlSettings instanceof Object) || !(coreSpecific.settings instanceof Object) || !Array.isArray(coreSpecific.cheats)) return;
-                this.controls = coreSpecific.controlSettings;
-                this.checkGamepadInputs();
-                for (const k in coreSpecific.settings) {
-                    this.changeSettingOption(k, coreSpecific.settings[k]);
-                }
-                for (let i = 0; i < coreSpecific.cheats.length; i++) {
-                    const cheat = coreSpecific.cheats[i];
-                    let includes = false;
-                    for (let j = 0; j < this.cheats.length; j++) {
-                        if (this.cheats[j].desc === cheat.desc && this.cheats[j].code === cheat.code) {
-                            this.cheats[j].checked = cheat.checked;
-                            includes = true;
-                            break;
+        if (window.localStorage && !this.config.disableLocalStorage) {
+            let ejs_settings = localStorage.getItem("ejs-settings");
+            let coreSpecific = localStorage.getItem(this.getLocalStorageKey());
+            if (coreSpecific) {
+                try {
+                    coreSpecific = JSON.parse(coreSpecific);
+                    if (coreSpecific.controlSettings instanceof Object && coreSpecific.settings instanceof Object && Array.isArray(coreSpecific.cheats)) {
+                        this.controls = coreSpecific.controlSettings;
+                        this.checkGamepadInputs();
+                        for (const k in coreSpecific.settings) {
+                            this.changeSettingOption(k, coreSpecific.settings[k]);
+                        }
+                        for (let i = 0; i < coreSpecific.cheats.length; i++) {
+                            const cheat = coreSpecific.cheats[i];
+                            let includes = false;
+                            for (let j = 0; j < this.cheats.length; j++) {
+                                if (this.cheats[j].desc === cheat.desc && this.cheats[j].code === cheat.code) {
+                                    this.cheats[j].checked = cheat.checked;
+                                    includes = true;
+                                    break;
+                                }
+                            }
+                            if (includes) continue;
+                            this.cheats.push(cheat);
                         }
                     }
-                    if (includes) continue;
-                    this.cheats.push(cheat);
+                } catch(e) {
+                    console.warn("Could not load previous settings", e);
                 }
-
-            } catch(e) {
-                console.warn("Could not load previous settings", e);
+            }
+            if (ejs_settings) {
+                try {
+                    ejs_settings = JSON.parse(ejs_settings);
+                    if (typeof ejs_settings.volume === "number" && typeof ejs_settings.muted === "boolean") {
+                        this.volume = ejs_settings.volume;
+                        this.muted = ejs_settings.muted;
+                        this.setVolume(this.muted ? 0 : this.volume);
+                    }
+                } catch(e) {
+                    console.warn("Could not load previous settings", e);
+                }
             }
         }
-        if (ejs_settings) {
-            try {
-                ejs_settings = JSON.parse(ejs_settings);
-                if (typeof ejs_settings.volume !== "number" || typeof ejs_settings.muted !== "boolean") return;
-                this.volume = ejs_settings.volume;
-                this.muted = ejs_settings.muted;
-                this.setVolume(this.muted ? 0 : this.volume);
-            } catch(e) {
-                console.warn("Could not load previous settings", e);
+        if (!this.controls) {
+            this.controls = { 0: {}, 1: {}, 2: {}, 3: {} };
+        }
+        for (let p = 0; p < 4; p++) {
+            if (!this.controls[p] || Object.keys(this.controls[p]).length === 0) {
+                if (this.defaultControllers && this.defaultControllers[p]) {
+                    this.controls[p] = JSON.parse(JSON.stringify(this.defaultControllers[p]));
+                } else {
+                    this.controls[p] = {};
+                }
             }
+        }
+        this.setupKeys();
+        if (typeof this.checkGamepadInputs === "function") {
+            this.checkGamepadInputs();
         }
     }
     handleSpecialOptions(option, value) {
