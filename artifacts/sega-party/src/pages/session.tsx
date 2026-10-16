@@ -53,6 +53,7 @@ import {
   Loader2,
   Disc,
   Zap,
+  Wand2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -1044,68 +1045,16 @@ export default function SessionPage() {
   useEffect(() => {
     const activeSlot = effectiveSlot;
 
-    const KEY_ACTIONS_P1: Record<string, string> = {
-      ArrowUp: "up",
-      ArrowDown: "down",
-      ArrowLeft: "left",
-      ArrowRight: "right",
-      z: "a",
-      Z: "a",
-      x: "b",
-      X: "b",
-      c: "c",
-      C: "c",
-      a: "x",
-      A: "x",
-      s: "y",
-      S: "y",
-      d: "z",
-      D: "z",
-      Enter: "start",
-      " ": "mode",
-    };
-
-    const KEY_ACTIONS_P2: Record<string, string> = {
-      w: "up",
-      W: "up",
-      i: "up",
-      I: "up",
-      k: "down",
-      K: "down",
-      j: "left",
-      J: "left",
-      l: "right",
-      L: "right",
-      u: "a",
-      U: "a",
-      o: "b",
-      O: "b",
-      p: "c",
-      P: "c",
-      "7": "x",
-      "8": "y",
-      "9": "z",
-      "0": "start",
-      "-": "mode",
-    };
-
-    // Invert user's configured keyboardMapping
-    const keyToGenesisAction: Record<string, string> = {};
+    // Build authoritative action lookup from active user's configured keyboardMapping
+    const activeKeyMap: Record<string, string> = {};
     for (const [action, key] of Object.entries(keyboardMapping)) {
-      keyToGenesisAction[key] = action;
+      if (!key) continue;
+      activeKeyMap[key] = action;
       if (key.length === 1) {
-        keyToGenesisAction[key.toLowerCase()] = action;
-        keyToGenesisAction[key.toUpperCase()] = action;
+        activeKeyMap[key.toLowerCase()] = action;
+        activeKeyMap[key.toUpperCase()] = action;
       }
     }
-
-    const defaultActionMap = !isHost
-      ? { ...KEY_ACTIONS_P2, ...KEY_ACTIONS_P1 }
-      : activeSlot === 2
-      ? KEY_ACTIONS_P2
-      : KEY_ACTIONS_P1;
-
-    const actionMap = { ...defaultActionMap, ...keyToGenesisAction };
 
     const forwardKey = (e: KeyboardEvent, type: "keydown" | "keyup") => {
       // Ignore synthetic events dispatched by handleInputEvent to prevent infinite loop
@@ -1121,14 +1070,18 @@ export default function SessionPage() {
             (activeEl as HTMLInputElement).type !== "checkbox"));
       if (isTextEntry) return;
 
-      const action = keyToGenesisAction[e.key] || actionMap[e.key];
+      const action = activeKeyMap[e.key];
       if (!action) return;
 
       e.preventDefault();
       handleButtonActivity(action, type === "keydown");
 
-      const keyInfo = getPlayerActionKey(activeSlot, action);
-      if (!keyInfo) return;
+      const keyInfo = getPlayerActionKey(activeSlot, action) || {
+        key: e.key,
+        keyCode: e.keyCode,
+        code: e.code,
+        label: action,
+      };
 
       handleInputEvent({
         type,
@@ -1383,11 +1336,11 @@ export default function SessionPage() {
           {/* Controls Setup */}
           <Button
             size="sm"
-            variant="outline"
+            variant="default"
             onClick={() => setControlsOpen(true)}
-            className="h-7 px-2 text-xs font-sans border-border text-muted-foreground hover:text-foreground gap-1"
+            className="h-7 px-2.5 text-xs font-sans bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-sm shadow-primary/40 gap-1.5"
           >
-            <Settings2 className="w-3.5 h-3.5" /> Config
+            <Wand2 className="w-3.5 h-3.5 text-accent animate-pulse" /> Controls Wizard
           </Button>
         </div>
       </header>
@@ -1753,6 +1706,7 @@ export default function SessionPage() {
             onPassSlot={handlePassSlot}
             onKickSlot={handleKickSlot}
             onRequestSlot={handleRequestSlot}
+            onOpenControls={() => setControlsOpen(true)}
           />
 
           {/* Mobile Touch Controller (if toggled) */}

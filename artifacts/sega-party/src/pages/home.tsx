@@ -21,11 +21,13 @@ import {
   Cpu,
   ShieldCheck,
   Disc,
+  Wand2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { setRom, setRomFromUrl } from "@/lib/romStore";
 import { RomDropzone } from "@/components/RomDropzone";
 import { ConsoleShowcase } from "@/components/ConsoleShowcase";
+import { ControlsModal } from "@/components/ControlsModal";
 import { detectConsoleFromFilename, getConsoleSystem } from "@/lib/consoles";
 import { cleanRomTitle } from "@/lib/romUtils";
 import { setStoredPlayerIdentity } from "@/lib/webrtc";
@@ -68,6 +70,7 @@ export default function Home() {
   const [romUrlInput, setRomUrlInput] = useState("");
   const [selectedCore, setSelectedCore] = useState<string>("segaMD");
   const [detectedCore, setDetectedCore] = useState<string | undefined>();
+  const [controlsOpen, setControlsOpen] = useState(false);
 
   // Join Session State
   const [joinName, setJoinName] = useState(getRandomName);
@@ -225,14 +228,26 @@ export default function Home() {
               </TabsTrigger>
             </TabsList>
 
-            <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <Users className="w-3.5 h-3.5 text-primary" /> Up to 4 Players
-              </span>
-              <span className="text-border">·</span>
-              <span className="flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5 text-accent" /> WebRTC P2P Sync
-              </span>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setControlsOpen(true)}
+                className="h-9 px-3 text-xs font-bold border-primary/40 text-primary hover:bg-primary hover:text-primary-foreground gap-1.5 shadow-sm"
+              >
+                <Wand2 className="w-3.5 h-3.5 text-accent animate-pulse" /> Controls Setup
+              </Button>
+
+              <div className="hidden lg:flex items-center gap-2 text-xs font-mono text-muted-foreground ml-1">
+                <span className="flex items-center gap-1">
+                  <Users className="w-3.5 h-3.5 text-primary" /> Up to 4 Players
+                </span>
+                <span className="text-border">·</span>
+                <span className="flex items-center gap-1">
+                  <Sparkles className="w-3.5 h-3.5 text-accent" /> WebRTC P2P Sync
+                </span>
+              </div>
             </div>
           </div>
 
@@ -457,6 +472,15 @@ export default function Home() {
         <span>·</span>
         <span>SEGA Party Cyber-Arcade Edition</span>
       </footer>
+
+      {/* Controls & Gamepad Rebind Modal */}
+      <ControlsModal
+        open={controlsOpen}
+        onClose={() => setControlsOpen(false)}
+        activeCore={selectedCore}
+        playerSlot={1}
+        isHost={true}
+      />
     </div>
   );
 }

@@ -101,8 +101,29 @@ export const PLAYER_KEY_MAPPINGS: Record<number, Record<string, GameAction>> = {
 };
 
 export function getPlayerActionKey(playerIndex: number, actionName: string): GameAction | null {
-  const slotMap = PLAYER_KEY_MAPPINGS[playerIndex] || PLAYER_KEY_MAPPINGS[1];
-  return slotMap[actionName] || null;
+  const slot = Math.max(1, Math.min(4, Math.floor(Number(playerIndex) || 1)));
+  const slotMap = PLAYER_KEY_MAPPINGS[slot] || PLAYER_KEY_MAPPINGS[1];
+  const normAction = (actionName || "").toLowerCase().trim();
+  if (slotMap[normAction]) return slotMap[normAction];
+
+  // Map non-Genesis or cross-console action aliases to sensible defaults
+  const CONSOLE_ALIASES: Record<string, string> = {
+    cross: "a",
+    circle: "b",
+    square: "x",
+    triangle: "y",
+    select: "mode",
+    l1: "l",
+    r1: "r",
+    l2: "z",
+    r2: "c",
+  };
+  const alias = CONSOLE_ALIASES[normAction];
+  if (alias && slotMap[alias]) {
+    return slotMap[alias];
+  }
+
+  return null;
 }
 
 // Maps gamepad button index → action name. Axis entries use "axis-0-neg" etc.
@@ -270,7 +291,7 @@ export function saveKeyboardMapping(mapping: KeyboardMapping): void {
 
 /**
  * Assigns a key to an action, unbinding any other action that already uses that key
- * to prevent duplicate input conflicts.
+ * to prevent duplicate input conflicts across all console action IDs.
  */
 export function assignKeyboardBinding(
   mapping: KeyboardMapping,
@@ -278,20 +299,44 @@ export function assignKeyboardBinding(
   newKey: string
 ): KeyboardMapping {
   const updated: KeyboardMapping = { ...mapping };
-  const targetKeyLower = newKey.toLowerCase();
+  const targetAction = (actionToAssign || "").trim().toLowerCase();
+  const targetKey = (newKey || "").trim();
 
+  if (!targetAction) return updated;
+
+  // If empty key passed, unbind the action
+  if (!targetKey) {
+    for (const action of Object.keys(updated)) {
+      if (action.toLowerCase() === targetAction) {
+        delete updated[action];
+      }
+    }
+    return updated;
+  }
+
+  const targetKeyLower = targetKey.toLowerCase();
+
+  // 1. Remove any conflicting action currently bound to newKey (case-insensitive)
   for (const [action, key] of Object.entries(updated)) {
-    if (action !== actionToAssign && key.toLowerCase() === targetKeyLower) {
+    if (action.toLowerCase() !== targetAction && key.trim().toLowerCase() === targetKeyLower) {
       delete updated[action];
     }
   }
-  updated[actionToAssign] = newKey;
+
+  // 2. Clear any existing key for targetAction (regardless of key casing)
+  for (const action of Object.keys(updated)) {
+    if (action.toLowerCase() === targetAction) {
+      delete updated[action];
+    }
+  }
+
+  updated[targetAction] = targetKey;
   return updated;
 }
 
 /**
  * Assigns a gamepad button or axis to an action, clearing any previous assignments
- * to that button/axis or to that action to prevent conflict.
+ * to that button/axis or to that action to prevent conflict across all console action IDs.
  */
 export function assignGamepadBinding(
   mapping: GamepadMapping,
@@ -299,16 +344,40 @@ export function assignGamepadBinding(
   newButtonOrAxis: string
 ): GamepadMapping {
   const updated: GamepadMapping = { ...mapping };
+  const targetAction = (actionToAssign || "").trim().toLowerCase();
+  const targetBtn = (newButtonOrAxis || "").trim();
+
+  if (!targetAction) return updated;
+
+  // If empty button/axis passed, unbind this action
+  if (!targetBtn) {
+    for (const [btn, act] of Object.entries(updated)) {
+      if (act.trim().toLowerCase() === targetAction) {
+        delete updated[btn];
+      }
+    }
+    return updated;
+  }
+
+  const isTargetAxis = targetBtn.startsWith("axis");
 
   for (const [btn, act] of Object.entries(updated)) {
-    if (btn === newButtonOrAxis) {
+    // 1. Clear whatever was previously assigned to this physical button/axis
+    if (btn === targetBtn) {
       delete updated[btn];
     }
-    if (act === actionToAssign && !btn.startsWith("axis")) {
-      delete updated[btn];
+    // 2. Clear previous assignments for this action:
+    // If target is an axis (e.g. axis-0-neg), clear any other axis mapped to targetAction.
+    // If target is a button (e.g. "0"), clear any other button mapped to targetAction (preserving stick axes).
+    const isBtnAxis = btn.startsWith("axis");
+    if (act.trim().toLowerCase() === targetAction) {
+      if (isTargetAxis ? isBtnAxis : !isBtnAxis) {
+        delete updated[btn];
+      }
     }
   }
-  updated[newButtonOrAxis] = actionToAssign;
+
+  updated[targetBtn] = targetAction;
   return updated;
 }
 
@@ -567,9 +636,31 @@ export function simulateEmulatorInput(
     if (sent) return true;
   }
 
-  // Fallback: dispatch KeyboardEvent using player's assigned key mapping
-  const keyAction = getPlayerActionKey(playerIndex, normAction);
-  if (!keyAction) return false;
+  // Fallback: dispatch KeyboardEvent using player's assigned key mapping or synthesized key
+  let keyAction = getPlayerActionKey(playerIndex, normAction);
+  if (!keyAction) {
+    try {
+      const userMapping = loadPlayerKeyboardMapping(playerIndex);
+      const mappedKey = userMapping[normAction];
+      if (mappedKey) {
+        keyAction = {
+          key: mappedKey,
+          keyCode: 0,
+          code: mappedKey.length === 1 ? `Key${mappedKey.toUpperCase()}` : mappedKey,
+          label: normAction,
+        };
+      }
+    } catch {}
+  }
+
+  if (!keyAction) {
+    keyAction = {
+      key: normAction,
+      keyCode: 0,
+      code: normAction,
+      label: normAction,
+    };
+  }
 
   const target = win.EJS_emulator?.elements?.parent || document.getElementById("game") || window;
   const eventType = isDown ? "keydown" : "keyup";

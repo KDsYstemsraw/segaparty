@@ -12,6 +12,8 @@ import {
   Zap,
   Radio,
   CircleDot,
+  Settings2,
+  Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -42,6 +44,7 @@ interface ControllerSlotsProps {
   onPassSlot?: (slot: number, targetPeerId: string, targetPlayerName: string) => void;
   onKickSlot?: (slot: number) => void;
   onRequestSlot?: (slot: number) => void;
+  onOpenControls?: () => void;
 }
 
 const SLOT_CONFIGS: Record<
@@ -131,6 +134,7 @@ export function ControllerSlots({
   onPassSlot,
   onKickSlot,
   onRequestSlot,
+  onOpenControls,
 }: ControllerSlotsProps) {
   const eligibleSpectators = participants.filter(
     (p) => !Object.values(slots).some((s) => s?.peerId === p.peerId),
@@ -149,16 +153,29 @@ export function ControllerSlots({
           </h3>
         </div>
 
-        {mySlot && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => onReleaseSlot(mySlot)}
-            className="h-7 text-xs border-muted-foreground/30 text-muted-foreground hover:text-destructive hover:border-destructive font-sans gap-1"
-          >
-            <UserX className="w-3 h-3" /> Leave Player {mySlot} (Spectate)
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {onOpenControls && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onOpenControls}
+              className="h-7 text-xs border-primary/50 text-primary hover:bg-primary hover:text-primary-foreground font-bold gap-1"
+            >
+              <Settings2 className="w-3.5 h-3.5" /> Controls Setup Wizard
+            </Button>
+          )}
+
+          {mySlot && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onReleaseSlot(mySlot)}
+              className="h-7 text-xs border-muted-foreground/30 text-muted-foreground hover:text-destructive hover:border-destructive font-sans gap-1"
+            >
+              <UserX className="w-3 h-3" /> Leave Player {mySlot} (Spectate)
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -309,52 +326,65 @@ export function ControllerSlots({
                     </div>
                   )}
 
-                  {/* If isMe: Pass Controller dropdown & Release (Spectate) button */}
+                  {/* If isMe: Keybind Setup Wizard & Pass Controller / Release */}
                   {isMe && (
-                    <div className="flex items-center gap-1.5 pt-1">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="flex-1 h-7 text-xs border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
-                          >
-                            <Send className="w-3 h-3" /> Pass Controller
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start" className="w-48 bg-card border-border">
-                          <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
-                            Pass to Spectator
-                          </DropdownMenuLabel>
-                          <DropdownMenuSeparator />
-                          {eligibleSpectators.length === 0 ? (
-                            <div className="p-2 text-xs text-muted-foreground text-center">
-                              No spectators available
-                            </div>
-                          ) : (
-                            eligibleSpectators.map((p) => (
-                              <DropdownMenuItem
-                                key={p.peerId}
-                                onClick={() => onPassSlot?.(slotNum, p.peerId, p.playerName)}
-                                className="cursor-pointer text-xs flex items-center justify-between"
-                              >
-                                <span className="font-bold truncate">{p.playerName}</span>
-                                <span className="text-[10px] text-muted-foreground font-mono">Give</span>
-                              </DropdownMenuItem>
-                            ))
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                    <div className="space-y-1.5 pt-1">
+                      {onOpenControls && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={onOpenControls}
+                          className="w-full h-7 text-xs border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
+                        >
+                          <Wand2 className="w-3 h-3 text-accent" /> Keybind Setup Wizard
+                        </Button>
+                      )}
 
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => onReleaseSlot(slotNum)}
-                        className="h-7 text-xs border-muted-foreground/30 text-muted-foreground hover:text-destructive hover:border-destructive font-sans px-2"
-                        title="Release (Spectate)"
-                      >
-                        <UserX className="w-3 h-3 mr-1" /> Spectate
-                      </Button>
+                      <div className="flex items-center gap-1.5">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="flex-1 h-7 text-xs border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
+                            >
+                              <Send className="w-3 h-3" /> Pass Controller
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start" className="w-48 bg-card border-border">
+                            <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
+                              Pass to Spectator
+                            </DropdownMenuLabel>
+                            <DropdownMenuSeparator />
+                            {eligibleSpectators.length === 0 ? (
+                              <div className="p-2 text-xs text-muted-foreground text-center">
+                                No spectators available
+                              </div>
+                            ) : (
+                              eligibleSpectators.map((p) => (
+                                <DropdownMenuItem
+                                  key={p.peerId}
+                                  onClick={() => onPassSlot?.(slotNum, p.peerId, p.playerName)}
+                                  className="cursor-pointer text-xs flex items-center justify-between"
+                                >
+                                  <span className="font-bold truncate">{p.playerName}</span>
+                                  <span className="text-[10px] text-muted-foreground font-mono">Give</span>
+                                </DropdownMenuItem>
+                              ))
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onReleaseSlot(slotNum)}
+                          className="h-7 text-xs border-muted-foreground/30 text-muted-foreground hover:text-destructive hover:border-destructive font-sans px-2"
+                          title="Release (Spectate)"
+                        >
+                          <UserX className="w-3 h-3 mr-1" /> Spectate
+                        </Button>
+                      </div>
                     </div>
                   )}
 

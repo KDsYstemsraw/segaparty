@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { loadMapping, getPlayerActionKey } from "@/lib/gamepadMapping";
+import { loadPlayerGamepadMapping, getPlayerActionKey } from "@/lib/gamepadMapping";
 import type { PlayerInputEvent } from "@/lib/webrtc";
 
 const AXIS_THRESHOLD = 0.5;
@@ -21,13 +21,16 @@ export function useGamepad(
   useEffect(() => {
     const pressed = new Map<string, boolean>();
     let rafId: number;
-    let mapping = loadMapping();
+    const slot = Math.max(1, Math.min(4, Math.floor(Number(playerSlot) || 1)));
+    let mapping = loadPlayerGamepadMapping(slot);
 
     const reloadMapping = () => {
-      mapping = loadMapping();
+      mapping = loadPlayerGamepadMapping(slotRef.current || 1);
     };
+
     window.addEventListener("storage", reloadMapping);
     window.addEventListener("gamepad-mapping-changed", reloadMapping);
+    window.addEventListener("controls-mapping-changed", reloadMapping);
 
     function fireInput(stateKey: string, actionName: string, isDown: boolean) {
       const wasDown = pressed.get(stateKey) ?? false;
@@ -36,15 +39,19 @@ export function useGamepad(
 
       onActivityRef.current?.(actionName, isDown);
 
-      const slot = slotRef.current;
-      if (!slot) return; // Spectators don't send inputs to the game
+      const activeSlot = slotRef.current;
+      if (!activeSlot) return; // Spectators don't send inputs to the game
 
-      const keyInfo = getPlayerActionKey(slot, actionName);
-      if (!keyInfo) return;
+      const keyInfo = getPlayerActionKey(activeSlot, actionName) || {
+        key: actionName,
+        keyCode: 0,
+        code: actionName,
+        label: actionName,
+      };
 
       onInputRef.current({
         type: isDown ? "keydown" : "keyup",
-        playerIndex: slot,
+        playerIndex: activeSlot,
         action: actionName,
         key: keyInfo.key,
         keyCode: keyInfo.keyCode,
@@ -86,7 +93,7 @@ export function useGamepad(
       cancelAnimationFrame(rafId);
       window.removeEventListener("storage", reloadMapping);
       window.removeEventListener("gamepad-mapping-changed", reloadMapping);
+      window.removeEventListener("controls-mapping-changed", reloadMapping);
     };
-  }, []);
+  }, [playerSlot]);
 }
-
