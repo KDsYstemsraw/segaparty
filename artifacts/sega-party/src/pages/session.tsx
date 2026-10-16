@@ -52,6 +52,7 @@ import {
   HomeIcon,
   Gamepad2,
   Settings2,
+  Sliders,
   Volume2,
   VolumeX,
   Maximize2,
@@ -125,6 +126,7 @@ export default function SessionPage() {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [crtFilter, setCrtFilter] = useState(false);
   const [showTouchGamepad, setShowTouchGamepad] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
@@ -1143,6 +1145,14 @@ export default function SessionPage() {
       }
       if (!e.isTrusted) return;
 
+      // Escape key guard: When chat overlay is open, Esc closes chat without exiting fullscreen
+      if (chatOverlayOpen && e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setChatOverlayOpen(false);
+        return;
+      }
+
       // 2. When Controls Modal or Join Modal is Open, block game inputs
       if (controlsOpen || joinPromptOpen || romPickerOpen || inviteOpen) {
         const gameEl = document.getElementById("game");
@@ -1415,14 +1425,63 @@ export default function SessionPage() {
   };
 
 
-  const toggleFullscreen = () => {
-    if (!videoContainerRef.current) return;
+  const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
-      videoContainerRef.current.requestFullscreen().catch(() => {});
+      if (videoContainerRef.current?.requestFullscreen) {
+        videoContainerRef.current.requestFullscreen().catch(() => {
+          setIsFullscreen((prev) => !prev);
+        });
+        setIsFullscreen(true);
+      } else {
+        setIsFullscreen((prev) => !prev);
+      }
     } else {
-      document.exitFullscreen().catch(() => {});
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+      setIsFullscreen(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+
+    const handleRetropartyToggle = (e: Event) => {
+      const custom = e as CustomEvent<{ fullscreen?: boolean }>;
+      if (custom.detail && typeof custom.detail.fullscreen === "boolean") {
+        if (custom.detail.fullscreen) {
+          if (!document.fullscreenElement && videoContainerRef.current?.requestFullscreen) {
+            videoContainerRef.current.requestFullscreen().catch(() => {});
+          }
+          setIsFullscreen(true);
+        } else {
+          if (document.fullscreenElement && document.exitFullscreen) {
+            document.exitFullscreen().catch(() => {});
+          }
+          setIsFullscreen(false);
+        }
+      } else {
+        toggleFullscreen();
+      }
+    };
+
+    const handleOpenControls = () => {
+      setControlsSlot(effectiveSlot);
+      setControlsOpen(true);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    window.addEventListener("retroparty-toggle-fullscreen", handleRetropartyToggle);
+    window.addEventListener("open-retroparty-controls", handleOpenControls);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      window.removeEventListener("retroparty-toggle-fullscreen", handleRetropartyToggle);
+      window.removeEventListener("open-retroparty-controls", handleOpenControls);
+    };
+  }, [toggleFullscreen, effectiveSlot]);
 
   const displayParticipants = participants.length > 0
     ? participants
@@ -1651,11 +1710,25 @@ export default function SessionPage() {
                   <p className="text-muted-foreground text-xs font-sans">Cleaning up previous console memory and preparing new system...</p>
                 </div>
               ) : romUrl ? (
-                <div ref={videoContainerRef} className="w-full relative rounded-xl overflow-hidden">
+                <div
+                  ref={videoContainerRef}
+                  className={cn(
+                    "w-full relative overflow-hidden transition-all group",
+                    isFullscreen
+                      ? "fixed inset-0 z-[80] w-screen h-screen max-w-none rounded-none bg-black flex items-center justify-center"
+                      : "rounded-xl"
+                  )}
+                >
                   <Emulator
                     key={`${romUrl}-${activeCore}`}
                     romUrl={romUrl}
                     core={activeCore}
+                    isFullscreen={isFullscreen}
+                    onToggleFullscreen={toggleFullscreen}
+                    onOpenControls={() => {
+                      setControlsSlot(effectiveSlot);
+                      setControlsOpen(true);
+                    }}
                     onStreamReady={handleStreamReady}
                     onAudioTrackAdded={handleAudioTrackAdded}
                     onVideoFrame={handleVideoFrame}
@@ -1678,7 +1751,43 @@ export default function SessionPage() {
                   />
 
                   {/* Floating Frosted Glass In-Stream Controls Overlay (Host) */}
-                  <div className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-20 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                  <div className="absolute bottom-14 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-[90] shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                    {/* Toggle EmulatorJS Bottom Settings Bar */}
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => {
+                        const win = window as any;
+                        if (typeof win.EJS_emulator?.menu?.toggle === "function") {
+                          win.EJS_emulator.menu.toggle();
+                        }
+                      }}
+                      className="w-7 h-7 text-muted-foreground hover:text-foreground hover:bg-white/10 rounded-lg"
+                      title="Toggle Emulator Settings Bar"
+                    >
+                      <Sliders className="w-3.5 h-3.5" />
+                    </Button>
+
+                    <div className="w-px h-4 bg-white/10" />
+
+                    {/* Remap Keybinds Shortcut */}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setControlsSlot(effectiveSlot);
+                        setControlsOpen(true);
+                      }}
+                      className="h-7 px-2 text-xs text-primary-foreground hover:bg-white/10 font-bold gap-1 rounded-lg"
+                      title={`Configure Keybinds for Player ${effectiveSlot}`}
+                    >
+                      <Gamepad2 className="w-3.5 h-3.5 text-accent" />
+                      <span className="hidden sm:inline">P{effectiveSlot} Keybinds</span>
+                    </Button>
+
+                    <div className="w-px h-4 bg-white/10" />
+
+                    {/* On-Screen Chat Toggle */}
                     <Button
                       size="icon"
                       variant="ghost"
@@ -1693,17 +1802,28 @@ export default function SessionPage() {
                     >
                       <MessageSquare className="w-3.5 h-3.5" />
                     </Button>
+
                     <div className="w-px h-4 bg-white/10" />
+
+                    {/* Fullscreen Toggle */}
                     <Button
                       size="icon"
                       variant="ghost"
                       onClick={toggleFullscreen}
-                      className="w-7 h-7 text-muted-foreground hover:text-foreground hover:bg-white/10 rounded-lg"
-                      title="Fullscreen"
+                      className={cn(
+                        "w-7 h-7 rounded-lg transition-colors",
+                        isFullscreen
+                          ? "bg-primary/20 text-primary border border-primary/40 shadow-[0_0_10px_rgba(0,140,255,0.3)]"
+                          : "text-muted-foreground hover:text-foreground hover:bg-white/10"
+                      )}
+                      title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
                     >
                       <Maximize2 className="w-3.5 h-3.5" />
                     </Button>
+
                     <div className="w-px h-4 bg-white/10" />
+
+                    {/* Eject ROM */}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -1740,7 +1860,12 @@ export default function SessionPage() {
                     unlockAudio();
                   }
                 }}
-                className="w-full aspect-[4/3] bg-black rounded-xl overflow-hidden relative flex items-center justify-center cursor-pointer border border-neutral-800"
+                className={cn(
+                  "bg-black overflow-hidden relative flex items-center justify-center cursor-pointer group",
+                  isFullscreen
+                    ? "fixed inset-0 z-[80] w-screen h-screen max-w-none rounded-none border-0"
+                    : "w-full aspect-[4/3] rounded-xl border border-neutral-800"
+                )}
               >
                 {(remoteStream || hasWsStream) ? (
                   <>
@@ -1819,7 +1944,7 @@ export default function SessionPage() {
                     {/* Floating Frosted Glass In-Stream Controls Overlay (Guest) */}
                     <div
                       onClick={(e) => e.stopPropagation()}
-                      className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-20 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                      className="absolute bottom-14 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-[90] shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"
                     >
                       {/* Volume Slider with Animated Speaker Wave */}
                       <div className="flex items-center gap-1.5">
@@ -1932,8 +2057,13 @@ export default function SessionPage() {
                         size="icon"
                         variant="ghost"
                         onClick={toggleFullscreen}
-                        className="w-7 h-7 text-muted-foreground hover:text-foreground hover:bg-white/10 rounded-lg"
-                        title="Toggle Fullscreen"
+                        className={cn(
+                          "w-7 h-7 rounded-lg transition-colors",
+                          isFullscreen
+                            ? "bg-primary/20 text-primary border border-primary/40 shadow-[0_0_10px_rgba(0,140,255,0.3)]"
+                            : "text-muted-foreground hover:text-foreground hover:bg-white/10"
+                        )}
+                        title={isFullscreen ? "Exit Fullscreen" : "Toggle Fullscreen"}
                       >
                         <Maximize2 className="w-3.5 h-3.5" />
                       </Button>

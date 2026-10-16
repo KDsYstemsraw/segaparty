@@ -1939,7 +1939,9 @@ class EmulatorJS {
             }
         });
         const controlMenu = addButton(this.config.buttonOpts.gamepad, () => {
-            this.controlMenu.style.display = "";
+            if (typeof window !== "undefined") {
+                window.dispatchEvent(new CustomEvent("open-retroparty-controls"));
+            }
         });
         const cheatMenu = addButton(this.config.buttonOpts.cheat, () => {
             this.cheatMenu.style.display = "";
@@ -2146,6 +2148,17 @@ class EmulatorJS {
         exit.style.display = "none";
 
         this.toggleFullscreen = (fullscreen) => {
+            if (typeof window !== "undefined" && window.__useRetroPartyFullscreen) {
+                window.dispatchEvent(new CustomEvent("retroparty-toggle-fullscreen", { detail: { fullscreen } }));
+                if (fullscreen) {
+                    exit.style.display = "";
+                    enter.style.display = "none";
+                } else {
+                    exit.style.display = "none";
+                    enter.style.display = "";
+                }
+                return;
+            }
             if (fullscreen) {
                 if (this.elements.parent.requestFullscreen) {
                     this.elements.parent.requestFullscreen();
@@ -2972,9 +2985,9 @@ class EmulatorJS {
                     textBox2.value = "";
                     textBox1.value = "";
                     if (this.controls[i][k] && this.controls[i][k].value !== undefined) {
-                        let value = this.keyMap[this.controls[i][k].value];
-                        value = this.localization(value);
-                        textBox2.value = value;
+                        let value = this.keyMap[this.controls[i][k].value] || "";
+                        value = value ? (this.localization(value) || value) : "";
+                        textBox2.value = value || "";
                     }
                     if (this.controls[i][k] && this.controls[i][k].value2 !== undefined && this.controls[i][k].value2 !== "") {
                         let value2 = this.controls[i][k].value2.toString();
@@ -2991,9 +3004,9 @@ class EmulatorJS {
                 })
 
                 if (this.controls[i][k] && this.controls[i][k].value) {
-                    let value = this.keyMap[this.controls[i][k].value];
-                    value = this.localization(value);
-                    textBox2.value = value;
+                    let value = this.keyMap[this.controls[i][k].value] || "";
+                    value = value ? (this.localization(value) || value) : "";
+                    textBox2.value = value || "";
                 }
                 if (this.controls[i][k] && this.controls[i][k].value2) {
                     let value2 = this.controls[i][k].value2.toString();

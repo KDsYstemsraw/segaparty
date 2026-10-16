@@ -101,7 +101,7 @@ export function InGameChatOverlay({
 
   return (
     <div
-      className="absolute bottom-3 left-3 z-30 w-80 sm:w-96 max-w-[calc(100%-1.5rem)] pointer-events-none font-sans select-none"
+      className="absolute bottom-14 left-4 z-[95] w-80 sm:w-96 max-w-[calc(100%-2rem)] pointer-events-none font-sans select-none"
       onKeyDown={(e) => e.stopPropagation()}
       onKeyUp={(e) => e.stopPropagation()}
       onKeyPress={(e) => e.stopPropagation()}
@@ -318,7 +318,7 @@ export function InGameChatOverlay({
             <button
               type="button"
               onClick={() => onOpenChange(true)}
-              className="pointer-events-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/55 hover:bg-black/80 border border-white/15 hover:border-white/30 text-[11px] text-white/80 hover:text-white transition-all cursor-pointer backdrop-blur-md shadow-md hover:scale-105 active:scale-95"
+              className="pointer-events-auto bg-black/75 hover:bg-black/90 text-white border border-white/20 px-3 py-1.5 rounded-full text-xs font-medium shadow-lg backdrop-blur-md flex items-center gap-2 transition-all cursor-pointer hover:scale-105 active:scale-95"
               title={`Press [${formatKey(chatHotkey)}] to open on-screen chat`}
             >
               <MessageSquare className="w-3.5 h-3.5 text-accent animate-pulse" />

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Monitor, Tv, Maximize2 } from "lucide-react";
+import { Monitor, Tv, Maximize2, Sliders } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   syncEmulatorJSControls,
@@ -10,6 +10,9 @@ import {
 export interface EmulatorProps {
   romUrl: string;
   core?: string;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+  onOpenControls?: () => void;
   onStreamReady?: (stream: MediaStream) => void;
   onAudioTrackAdded?: (track: MediaStreamTrack) => void;
   onVideoFrame?: (dataUrl: string) => void;
@@ -30,6 +33,8 @@ declare global {
     EJS_disableLocalStorage?: boolean;
     EJS_defaultOptions?: Record<string, string>;
     EJS_threads?: boolean;
+    __useRetroPartyFullscreen?: boolean;
+    EJS_Buttons?: Record<string, { visible: boolean }>;
     __emulatorAudioStream?: MediaStream | null;
     __onEmulatorAudioChunk?: (pcmBase64: string, sampleRate: number) => void;
   }
@@ -231,11 +236,16 @@ function teardownEmulator() {
   delete (window as unknown as Record<string, unknown>).EJS_onGameStart;
   delete (window as unknown as Record<string, unknown>).EJS_on;
   delete (window as unknown as Record<string, unknown>).EJS_defaultControls;
+  delete (window as unknown as Record<string, unknown>).__useRetroPartyFullscreen;
+  delete (window as unknown as Record<string, unknown>).EJS_Buttons;
 }
 
 export function Emulator({
   romUrl,
   core = "segaMD",
+  isFullscreen,
+  onToggleFullscreen,
+  onOpenControls,
   onStreamReady,
   onAudioTrackAdded,
   onVideoFrame,
@@ -610,6 +620,25 @@ export function Emulator({
       window.EJS_defaultOptions = {};
     }
 
+    (window as unknown as Record<string, unknown>).__useRetroPartyFullscreen = true;
+    (window as unknown as Record<string, unknown>).EJS_Buttons = {
+      playPause: { visible: true },
+      restart: { visible: true },
+      mute: { visible: true },
+      volumeSlider: { visible: true },
+      saveState: { visible: true },
+      loadState: { visible: true },
+      settings: { visible: true },
+      gamepad: { visible: true }, // Now opens RetroParty's ControlsModal via "open-retroparty-controls" event!
+      fullscreen: { visible: true }, // Now triggers RetroParty's Custom Fullscreen via "retroparty-toggle-fullscreen" event!
+      cheat: { visible: false },
+      netplay: { visible: false },
+      cacheManager: { visible: false },
+      saveSavFiles: { visible: false },
+      loadSavFiles: { visible: false },
+      exitEmulation: { visible: false },
+    };
+
     const script = document.createElement("script");
     script.src = "/emulatorjs/loader.js";
     script.async = true;
@@ -653,23 +682,29 @@ export function Emulator({
   }, [romUrl, core]);
 
 
-  const toggleFullscreen = () => {
-    if (!containerRef.current) return;
-    if (!document.fullscreenElement) {
-      containerRef.current.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen().catch(() => {});
+  const toggleEmulatorBottomBar = () => {
+    const ejs = (window as unknown as { EJS_emulator?: { menu?: { toggle?: () => void } } }).EJS_emulator;
+    if (ejs?.menu?.toggle) {
+      ejs.menu.toggle();
     }
   };
 
+  const toggleFullscreen = () => {
+    onToggleFullscreen?.();
+  };
+
   return (
-    <div className="w-full flex flex-col items-center">
+    <div className={`w-full flex flex-col items-center ${isFullscreen ? "h-full justify-center" : ""}`}>
       {/* Emulator container */}
       <div
         ref={containerRef}
-        className={`w-full max-w-4xl mx-auto ${
+        className={`w-full ${
+          isFullscreen
+            ? "max-w-none max-h-screen border-0 shadow-none rounded-none"
+            : "max-w-4xl mx-auto border-4 border-primary shadow-[0_0_25px_rgba(0,71,187,0.5)] rounded-lg"
+        } ${
           aspect43 ? "aspect-[4/3]" : "aspect-video"
-        } bg-black border-4 border-primary shadow-[0_0_25px_rgba(0,71,187,0.5)] relative overflow-hidden group rounded-lg`}
+        } bg-black relative overflow-hidden group`}
       >
         <div id="game" className="w-full h-full" />
 
@@ -680,6 +715,15 @@ export function Emulator({
 
         {/* Quick display controls overlay on hover */}
         <div className="absolute top-2 right-2 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity bg-black/80 p-1 rounded backdrop-blur border border-primary/30 z-20">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={toggleEmulatorBottomBar}
+            className="h-7 px-2 text-xs font-sans text-muted-foreground hover:text-primary"
+            title="Toggle Emulator Core Settings & Save States Bar"
+          >
+            <Sliders className="w-3.5 h-3.5 mr-1" /> Core Bar
+          </Button>
           <Button
             size="sm"
             variant="ghost"

@@ -222,8 +222,8 @@ export const GAME_ACTIONS: Record<string, GameAction> = {
   x:     { key: "a",          keyCode: 65, code: "KeyA",       label: "X Button" },
   y:     { key: "s",          keyCode: 83, code: "KeyS",       label: "Y Button" },
   z:     { key: "d",          keyCode: 68, code: "KeyD",       label: "Z Button" },
-  start: { key: "Enter",      keyCode: 13, code: "Enter",      label: "Start" },
-  mode:  { key: " ",          keyCode: 32, code: "Space",      label: "Mode" },
+  start: { key: " ",          keyCode: 32, code: "Space",      label: "Start" },
+  mode:  { key: "Shift",      keyCode: 16, code: "ShiftLeft",  label: "Mode" },
 };
 
 // Distinct virtual keycodes dispatched for each Player Slot (1 to 4)
@@ -239,8 +239,8 @@ export const PLAYER_KEY_MAPPINGS: Record<number, Record<string, GameAction>> = {
     x:     { key: "a",          keyCode: 65, code: "KeyA",       label: "X Button" },
     y:     { key: "s",          keyCode: 83, code: "KeyS",       label: "Y Button" },
     z:     { key: "d",          keyCode: 68, code: "KeyD",       label: "Z Button" },
-    start: { key: "Enter",      keyCode: 13, code: "Enter",      label: "Start" },
-    mode:  { key: " ",          keyCode: 32, code: "Space",      label: "Mode" },
+    start: { key: " ",          keyCode: 32, code: "Space",      label: "Start" },
+    mode:  { key: "Shift",      keyCode: 16, code: "ShiftLeft",  label: "Mode" },
   },
   2: {
     up:    { key: "i",          keyCode: 73, code: "KeyI",       label: "D-Pad Up" },
@@ -281,8 +281,8 @@ export const PLAYER_KEY_MAPPINGS: Record<number, Record<string, GameAction>> = {
     x:     { key: "7",          keyCode: 103,code: "Numpad7",    label: "X Button" },
     y:     { key: "9",          keyCode: 105,code: "Numpad9",    label: "Y Button" },
     z:     { key: "+",          keyCode: 107,code: "NumpadAdd",  label: "Z Button" },
-    start: { key: "Enter",      keyCode: 13, code: "NumpadEnter",label: "Start" },
-    mode:  { key: ".",          keyCode: 110,code: "NumpadDecimal", label: "Mode" },
+    start: { key: " ",          keyCode: 32, code: "Space",      label: "Start" },
+    mode:  { key: "Shift",      keyCode: 16, code: "ShiftLeft",  label: "Mode" },
   },
 };
 
@@ -398,9 +398,13 @@ export const DEFAULT_KEYBOARD_MAPPING: KeyboardMapping = {
   r1: "e",
   l2: "1",
   r2: "3",
+  "c-up": "i",
+  "c-down": "k",
+  "c-left": "j",
+  "c-right": "l",
   select: "Shift",
-  start: "Backspace",
-  mode: " ",
+  mode: "Shift",
+  start: " ",
 };
 
 export const WASD_KEYBOARD_MAPPING: KeyboardMapping = {
@@ -420,9 +424,13 @@ export const WASD_KEYBOARD_MAPPING: KeyboardMapping = {
   r1: "e",
   l2: "1",
   r2: "3",
+  "c-up": "ArrowUp",
+  "c-down": "ArrowDown",
+  "c-left": "ArrowLeft",
+  "c-right": "ArrowRight",
   select: "Shift",
-  start: "Backspace",
   mode: "Shift",
+  start: " ",
 };
 
 export const CHAT_HOTKEY_STORAGE_KEY = "retroparty-chat-hotkey";
@@ -473,11 +481,14 @@ export function loadPlayerKeyboardMapping(playerSlot: number): KeyboardMapping {
       }
     }
     if (mapping) {
-      // If stored mapping still had start: "Enter" but chat hotkey is also "Enter",
-      // migrate start to "Backspace" to prevent chat hotkey conflict
-      const chatHotkey = loadChatHotkey(slot);
-      if (mapping.start?.toLowerCase() === "enter" && chatHotkey.toLowerCase() === "enter") {
-        mapping.start = "Backspace";
+      // If the loaded mapping has mapping.start?.toLowerCase() === "enter" OR (mapping.start === "Backspace" && mapping.mode === " "),
+      // automatically migrate mapping.start = " ", mapping.mode = "Shift", mapping.select = "Shift"
+      const isLegacyEnter = mapping.start?.toLowerCase() === "enter";
+      const isLegacyBackspace = mapping.start === "Backspace" && mapping.mode === " ";
+      if (isLegacyEnter || isLegacyBackspace) {
+        mapping.start = " ";
+        mapping.mode = "Shift";
+        mapping.select = "Shift";
       }
       return mapping;
     }

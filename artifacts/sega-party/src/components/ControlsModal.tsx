@@ -1,10 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -239,24 +234,30 @@ const NUMPAD_KEYBOARD_MAPPING: KeyboardMapping = {
   r1: "*",
   l2: "-",
   r2: "+",
-  start: "Backspace",
+  start: " ",
   mode: "0",
   select: "0",
 };
 
 const DEFAULT_PRESET: KeyboardMapping = {
   ...DEFAULT_KEYBOARD_MAPPING,
-  start: "Backspace",
+  start: " ",
+  mode: "Shift",
+  select: "Shift",
 };
 
 const WASD_PRESET: KeyboardMapping = {
   ...WASD_KEYBOARD_MAPPING,
-  start: "Backspace",
+  start: " ",
+  mode: "Shift",
+  select: "Shift",
 };
 
 const NUMPAD_PRESET: KeyboardMapping = {
   ...NUMPAD_KEYBOARD_MAPPING,
-  start: "Backspace",
+  start: " ",
+  mode: "0",
+  select: "0",
 };
 
 function playBeep() {
@@ -609,6 +610,18 @@ export function ControlsModal({
         return;
       }
 
+      // Close modal on Escape when not in rebinding/wizard mode
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        releaseAllInputs();
+        setIsWizardActive(false);
+        setListeningActionId(null);
+        setListeningChatHotkey(false);
+        onClose();
+        return;
+      }
+
       // 3. Passive Live Testing
       if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
         setLastLiveInput(`Key: ${formatBindingLabel(e.key)}`);
@@ -958,26 +971,37 @@ export function ControlsModal({
 
   const normCore = (activeCore || "segaMD").toLowerCase();
 
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        if (!v) {
+  const portalTarget =
+    (typeof document !== "undefined" && (document.fullscreenElement as HTMLElement)) ||
+    (typeof document !== "undefined" ? document.body : null);
+
+  if (!open || !portalTarget) return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
           releaseAllInputs();
           setIsWizardActive(false);
           setListeningActionId(null);
           onClose();
         }
       }}
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md p-2 sm:p-4 overflow-y-auto font-sans"
     >
-      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto rounded-2xl border border-white/15 bg-card/95 backdrop-blur-xl font-sans shadow-2xl p-0">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-2xl border border-white/20 bg-[#0d111d] text-slate-100 shadow-[0_25px_80px_rgba(0,0,0,0.95)] p-0 my-auto"
+      >
         {/* Top Header Cyber Accent */}
-        <div className="h-1.5 w-full bg-gradient-to-r from-primary via-cyan-400 to-accent" />
+        <div className="h-1.5 w-full bg-gradient-to-r from-primary via-cyan-400 to-accent sticky top-0 z-30" />
 
         <div className="p-4 sm:p-6 space-y-4">
-          <DialogHeader className="space-y-3">
+          <div className="space-y-3">
             {/* 1. Auto-Detected Console & Controller High-Contrast Banner */}
-            <div className="p-4 rounded-2xl bg-neutral-900/95 border border-white/15 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-3.5">
+            <div className="p-4 rounded-2xl bg-neutral-900/95 border border-white/15 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-3.5 relative">
               <div className="flex items-center gap-3">
                 <div className="w-11 h-11 rounded-2xl bg-primary/20 border border-primary/40 flex items-center justify-center text-primary shrink-0 shadow-[0_0_20px_rgba(0,180,255,0.25)]">
                   <Gamepad2 className="w-6 h-6 text-accent animate-pulse" />
@@ -997,9 +1021,9 @@ export function ControlsModal({
                       Detected Console & Controller
                     </span>
                   </div>
-                  <DialogTitle className="text-base font-extrabold text-foreground font-sans flex items-center gap-2">
+                  <h2 className="text-base font-extrabold text-foreground font-sans flex items-center gap-2">
                     {getConsoleControllerTitle(activeCore)}
-                  </DialogTitle>
+                  </h2>
                   <p className="text-[11px] text-muted-foreground font-mono flex items-center gap-2">
                     <span className="text-primary font-semibold">{actions.length} Controller Buttons Mapped</span>
                     <span>•</span>
@@ -1008,33 +1032,52 @@ export function ControlsModal({
                 </div>
               </div>
 
-              {/* Player Slot Selector Pills (4 slots) */}
-              <div className="flex items-center gap-1.5 flex-wrap self-start md:self-center">
-                {[1, 2, 3, 4].map((slot) => {
-                  const isSelected = selectedSlot === slot;
-                  const isCurrentPlayer = playerSlot === slot;
-                  return (
-                    <button
-                      key={slot}
-                      type="button"
-                      onClick={() => setSelectedSlot(slot)}
-                      className={cn(
-                        "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border shadow-sm",
-                        isSelected
-                          ? "bg-primary text-primary-foreground border-primary shadow-[0_0_12px_rgba(0,180,255,0.4)] ring-1 ring-primary scale-[1.02]"
-                          : "bg-white/[0.04] text-muted-foreground border-white/10 hover:border-white/20 hover:text-foreground hover:bg-white/[0.08]",
-                      )}
-                    >
-                      <Gamepad2 className="w-3.5 h-3.5" />
-                      <span>Player {slot}</span>
-                      {slot === 1 ? (
-                        <span className="text-[10px] opacity-75 font-mono">(Host)</span>
-                      ) : isCurrentPlayer ? (
-                        <span className="text-[10px] text-accent font-bold font-mono">(You)</span>
-                      ) : null}
-                    </button>
-                  );
-                })}
+              {/* Player Slot Selector Pills & Close Button */}
+              <div className="flex items-center gap-2 flex-wrap self-start md:self-center">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {[1, 2, 3, 4].map((slot) => {
+                    const isSelected = selectedSlot === slot;
+                    const isCurrentPlayer = playerSlot === slot;
+                    return (
+                      <button
+                        key={slot}
+                        type="button"
+                        onClick={() => setSelectedSlot(slot)}
+                        className={cn(
+                          "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border shadow-sm",
+                          isSelected
+                            ? "bg-primary text-primary-foreground border-primary shadow-[0_0_12px_rgba(0,180,255,0.4)] ring-1 ring-primary scale-[1.02]"
+                            : "bg-white/[0.04] text-muted-foreground border-white/10 hover:border-white/20 hover:text-foreground hover:bg-white/[0.08]",
+                        )}
+                      >
+                        <Gamepad2 className="w-3.5 h-3.5" />
+                        <span>Player {slot}</span>
+                        {slot === 1 ? (
+                          <span className="text-[10px] opacity-75 font-mono">(Host)</span>
+                        ) : isCurrentPlayer ? (
+                          <span className="text-[10px] text-accent font-bold font-mono">(You)</span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    releaseAllInputs();
+                    setIsWizardActive(false);
+                    setListeningActionId(null);
+                    onClose();
+                  }}
+                  className="h-8 px-2.5 rounded-xl text-xs font-bold text-slate-300 hover:text-white hover:bg-white/15 border border-white/15 gap-1 shrink-0 ml-auto"
+                  title="Close Controls (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                  <span className="hidden sm:inline">Close</span>
+                </Button>
               </div>
             </div>
 
@@ -1059,7 +1102,7 @@ export function ControlsModal({
                   className="h-8 text-xs font-semibold rounded-xl border-white/10 hover:border-primary/50 bg-white/[0.02] hover:bg-white/[0.08] gap-1.5"
                 >
                   <Keyboard className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Arrows + Z/X/C</span>
+                  <span>Arrows + Z/X/C (Space = Start)</span>
                 </Button>
 
                 <Button
@@ -1070,7 +1113,7 @@ export function ControlsModal({
                   className="h-8 text-xs font-semibold rounded-xl border-white/10 hover:border-primary/50 bg-white/[0.02] hover:bg-white/[0.08] gap-1.5"
                 >
                   <Keyboard className="w-3.5 h-3.5 text-amber-400" />
-                  <span>WASD + J/K/L</span>
+                  <span>WASD + J/K/L (Space = Start)</span>
                 </Button>
 
                 <Button
@@ -1115,6 +1158,9 @@ export function ControlsModal({
                   <p className="text-[11px] text-muted-foreground font-sans">
                     All players can use the exact same hotkeys (like WASD or Arrows) without interfering with other players.
                   </p>
+                  <p className="text-[11px] text-accent/90 font-sans font-medium">
+                    Start is mapped to [Space] and Select/Mode to [Shift] so [Enter] is always free for In-Game Chat!
+                  </p>
                 </div>
               </div>
 
@@ -1140,7 +1186,7 @@ export function ControlsModal({
                 </Button>
               </div>
             </div>
-          </DialogHeader>
+          </div>
 
           {/* 3. Single Unified Step-by-Step Setup Wizard (Keyboard + Mouse + Gamepad) */}
           {isWizardActive ? (
@@ -1649,7 +1695,8 @@ export function ControlsModal({
             </div>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>,
+    portalTarget
   );
 }
