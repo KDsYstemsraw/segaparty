@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +49,25 @@ const RETRO_NAMES = [
   "Arcade_King",
 ];
 
+const UNAMBIGUOUS_EXTENSIONS: Record<string, string> = {
+  ".z64": "n64",
+  ".n64": "n64",
+  ".v64": "n64",
+  ".sfc": "snes",
+  ".smc": "snes",
+  ".nes": "nes",
+  ".gba": "gba",
+  ".gb": "gb",
+  ".gbc": "gb",
+  ".sms": "segaMS",
+  ".gg": "segaGG",
+  ".32x": "sega32x",
+  ".pbp": "psx",
+  ".md": "segaMD",
+  ".gen": "segaMD",
+  ".smd": "segaMD",
+};
+
 export default function Home() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
@@ -62,6 +81,7 @@ export default function Home() {
   const [romUrlInput, setRomUrlInput] = useState("");
   const [selectedCore, setSelectedCore] = useState<string>("segaMD");
   const [detectedCore, setDetectedCore] = useState<string | undefined>();
+  const [hasExplicitCore, setHasExplicitCore] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
 
   // Join Session State
@@ -69,24 +89,47 @@ export default function Home() {
   const [joinCode, setJoinCode] = useState("");
   const [hasInviteCode, setHasInviteCode] = useState(false);
 
+  // Guest friction refs
+  const joinCardRef = useRef<HTMLDivElement>(null);
+  const joinNameInputRef = useRef<HTMLInputElement>(null);
+
   const createSession = useCreateSession();
   const joinSession = useJoinSession();
 
-  // Support direct room code URL query parameter
+  // Support direct room code URL query parameter and auto-focus for guests (DES-01)
   useEffect(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const code = params.get("code") || params.get("join");
       if (code) {
-        setJoinCode(code.toUpperCase());
+        const cleanCode = code.toUpperCase();
+        setJoinCode(cleanCode);
         setHasInviteCode(true);
+        setTimeout(() => {
+          joinNameInputRef.current?.focus();
+          joinNameInputRef.current?.select();
+          joinCardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 150);
       }
     }
   }, []);
 
   const handleFileSelected = (file: File | null) => {
     setRomFile(file);
-    if (file) {
+    if (!file) return;
+
+    const lower = file.name.toLowerCase();
+    const dotIdx = lower.lastIndexOf(".");
+    const ext = dotIdx !== -1 ? lower.slice(dotIdx) : "";
+    const unambiguousCore = UNAMBIGUOUS_EXTENSIONS[ext];
+
+    if (unambiguousCore) {
+      setSelectedCore(unambiguousCore);
+      setDetectedCore(unambiguousCore);
+    } else if (hasExplicitCore) {
+      // User already explicitly selected a console core; do not overwrite with fallback
+      setDetectedCore(selectedCore);
+    } else {
       const sys = detectConsoleFromFilename(file.name);
       setSelectedCore(sys.id);
       setDetectedCore(sys.id);
@@ -99,9 +142,18 @@ export default function Home() {
       const clean = url.split("?")[0];
       const filename = clean.split("/").pop() || "";
       if (filename) {
-        const sys = detectConsoleFromFilename(filename);
-        setSelectedCore(sys.id);
-        setDetectedCore(sys.id);
+        const lower = filename.toLowerCase();
+        const dotIdx = lower.lastIndexOf(".");
+        const ext = dotIdx !== -1 ? lower.slice(dotIdx) : "";
+        const unambiguousCore = UNAMBIGUOUS_EXTENSIONS[ext];
+        if (unambiguousCore) {
+          setSelectedCore(unambiguousCore);
+          setDetectedCore(unambiguousCore);
+        } else if (!hasExplicitCore) {
+          const sys = detectConsoleFromFilename(filename);
+          setSelectedCore(sys.id);
+          setDetectedCore(sys.id);
+        }
       }
     }
   };
@@ -246,7 +298,7 @@ export default function Home() {
           {/* =============================================================== */}
           {/* LEFT COLUMN: START A PARTY ROOM (col-span-8)                    */}
           {/* =============================================================== */}
-          <div className="lg:col-span-8">
+          <div className={cn(hasInviteCode ? "order-2 lg:order-2 lg:col-span-7" : "order-1 lg:order-1 lg:col-span-8")}>
             <div className="rounded-2xl border border-white/10 bg-card/90 backdrop-blur-xl shadow-2xl p-5 sm:p-7 space-y-7">
               {/* Card Header */}
               <div className="flex items-center justify-between border-b border-white/10 pb-4">
@@ -281,6 +333,7 @@ export default function Home() {
                   selectedCore={selectedCore}
                   onSelectCore={(coreId) => {
                     setSelectedCore(coreId);
+                    setHasExplicitCore(true);
                     if (detectedCore && detectedCore !== coreId) {
                       setDetectedCore(undefined);
                     }
@@ -402,9 +455,10 @@ export default function Home() {
           {/* =============================================================== */}
           {/* RIGHT COLUMN: JOIN A FRIEND'S PARTY + HOW IT WORKS (col-span-4)  */}
           {/* =============================================================== */}
-          <div className="lg:col-span-4 space-y-6">
+          <div className={cn("space-y-6", hasInviteCode ? "order-1 lg:order-1 lg:col-span-5" : "order-2 lg:order-2 lg:col-span-4")}>
             {/* Join Room Card */}
             <div
+              ref={joinCardRef}
               className={cn(
                 "rounded-2xl border bg-card/90 backdrop-blur-xl p-5 sm:p-6 space-y-5 transition-all shadow-xl",
                 hasInviteCode
@@ -458,6 +512,7 @@ export default function Home() {
                   </button>
                 </div>
                 <Input
+                  ref={joinNameInputRef}
                   placeholder="GUEST NAME"
                   value={joinName}
                   onChange={(e) => setJoinName(e.target.value)}

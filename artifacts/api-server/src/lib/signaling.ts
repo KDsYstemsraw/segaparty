@@ -12,6 +12,7 @@ export interface SlotHolder {
 export interface RoomState {
   code: string;
   hostPeerId: string | null;
+  hostSecret: string | null;
   romName: string | null;
   core: string | null;
   slots: Record<number, SlotHolder | null>; // 1: P1, 2: P2, 3: P3, 4: P4
@@ -34,6 +35,7 @@ function getOrCreateRoom(sessionCode: string): RoomState {
     rooms.set(sessionCode, {
       code: sessionCode,
       hostPeerId: null,
+      hostSecret: null,
       romName: null,
       core: null,
       slots: {
@@ -78,12 +80,20 @@ function broadcastSlotState(room: RoomState) {
 }
 
 export function attachSignalingServer(server: Server) {
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  const wss = new WebSocketServer({
+    server,
+    path: "/ws",
+    maxPayload: 4 * 1024 * 1024, // 4 MB transport-level ceiling
+  });
 
   wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
     let myPeerId: string | null = null;
     let mySessionCode: string | null = null;
     let myPlayerName = "Anonymous";
+
+    // Per-connection rate limiting
+    let messageCount = 0;
+    let lastRateLimitWindow = Date.now();
 
     (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
     ws.on("pong", () => {
@@ -91,6 +101,31 @@ export function attachSignalingServer(server: Server) {
     });
 
     ws.on("message", (rawData) => {
+      // 1. Raw size check
+      const rawLen = Buffer.isBuffer(rawData)
+        ? rawData.length
+        : Array.isArray(rawData)
+        ? rawData.reduce((acc, b) => acc + b.length, 0)
+        : rawData instanceof ArrayBuffer
+        ? rawData.byteLength
+        : Buffer.byteLength(String(rawData));
+      if (rawLen > 4 * 1024 * 1024) {
+        logger.warn({ peerId: myPeerId }, "Dropped oversized WebSocket message (> 4MB)");
+        return;
+      }
+
+      // 2. Per-connection rate limiting (max 150 messages/sec)
+      const now = Date.now();
+      if (now - lastRateLimitWindow > 1000) {
+        messageCount = 0;
+        lastRateLimitWindow = now;
+      }
+      messageCount++;
+      if (messageCount > 150) {
+        logger.warn({ peerId: myPeerId }, "WebSocket message rate limit exceeded (150/s)");
+        return;
+      }
+
       let msg: Record<string, unknown>;
       try {
         msg = JSON.parse(rawData.toString()) as Record<string, unknown>;
@@ -102,22 +137,44 @@ export function attachSignalingServer(server: Server) {
 
       if (type === "join") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
-        const role = msg.role as "host" | "guest";
+        let role = msg.role as "host" | "guest";
         const peerId = msg.peerId as string;
         const playerName = (msg.playerName as string) || (role === "host" ? "Host" : "Guest");
         const romName = msg.romName as string | undefined;
+        const hostSecret = (msg.hostSecret as string) || (msg.hostToken as string) || (msg.playerId as string);
 
         if (!sessionCode || !peerId || !role) return;
 
-        myPeerId = peerId;
-        mySessionCode = sessionCode;
-        myPlayerName = playerName;
+        // Session code validation
+        if (!/^[A-Z0-9]{4,12}$/.test(sessionCode)) {
+          ws.send(JSON.stringify({ type: "error", message: "Invalid session code format" }));
+          return;
+        }
 
         const room = getOrCreateRoom(sessionCode);
         if (romName) room.romName = romName;
         if (msg.core) room.core = msg.core as string;
 
         cleanupStaleSlots(room);
+
+        // SEC-02: Host verification & takeover protection
+        if (role === "host") {
+          if (!room.hostSecret) {
+            // First host registration: establish secret for this room
+            room.hostSecret = hostSecret || peerId;
+          } else if (hostSecret && hostSecret === room.hostSecret) {
+            // Legitimate host reconnecting with valid secret
+            room.hostPeerId = peerId;
+          } else {
+            // Unauthorized client attempted role: "host" without the secret!
+            logger.warn({ sessionCode, peerId, playerName }, "Unauthorized host usurpation attempt rejected; downgrading to guest");
+            role = "guest";
+          }
+        }
+
+        myPeerId = peerId;
+        mySessionCode = sessionCode;
+        myPlayerName = playerName;
 
         if (role === "host") {
           room.hostPeerId = peerId;
@@ -140,7 +197,8 @@ export function attachSignalingServer(server: Server) {
             if (matchSlot) {
               room.slots[matchSlot] = { peerId, playerName, isHost: false };
             } else {
-              const freeSlot = [2, 3, 4, 1].find((s) => !room.slots[s]);
+              // QA-03: Guests must NEVER be auto-assigned to Slot 1! Only pick from [2, 3, 4]
+              const freeSlot = [2, 3, 4].find((s) => !room.slots[s]);
               if (freeSlot !== undefined) {
                 room.slots[freeSlot] = { peerId, playerName, isHost: false };
               }
@@ -284,17 +342,25 @@ export function attachSignalingServer(server: Server) {
       if (type === "slot-claim" || type === "claim-slot") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
         const slot = Number(msg.slot); // 1, 2, 3, 4
-        const effectivePeerId = (msg.peerId as string) || myPeerId;
-        const effectivePlayerName = (msg.playerName as string) || myPlayerName || "Player";
+        // SEC-06: Bind strictly to the socket's authenticated peerId; do NOT allow client-supplied peerId
+        const effectivePeerId = myPeerId;
+        const effectivePlayerName = myPlayerName || "Player";
 
         if (!sessionCode || slot < 1 || slot > 4 || !effectivePeerId) return;
 
-        myPeerId = effectivePeerId;
-        mySessionCode = sessionCode;
-        myPlayerName = effectivePlayerName;
-
         const room = getOrCreateRoom(sessionCode);
         cleanupStaleSlots(room);
+
+        // QA-03 / SEC-02: Slot 1 is reserved exclusively for the room host!
+        if (slot === 1 && effectivePeerId !== room.hostPeerId) {
+          ws.send(
+            JSON.stringify({
+              type: "error",
+              message: "Player 1 controller is reserved exclusively for the room host.",
+            }),
+          );
+          return;
+        }
 
         // Check if slot is occupied by another peer
         const existing = room.slots[slot];
@@ -345,8 +411,9 @@ export function attachSignalingServer(server: Server) {
       if (type === "slot-release") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
         const slot = Number(msg.slot);
-        const effectivePeerId = (msg.peerId as string) || myPeerId;
-        const effectivePlayerName = (msg.playerName as string) || myPlayerName || "Player";
+        // SEC-06: Bind strictly to the socket's authenticated peerId
+        const effectivePeerId = myPeerId;
+        const effectivePlayerName = myPlayerName || "Player";
 
         if (!sessionCode || !effectivePeerId) return;
 
@@ -404,6 +471,11 @@ export function attachSignalingServer(server: Server) {
 
         // Verify permission: host OR current occupant of this slot
         if (myPeerId !== room.hostPeerId && room.slots[slot]?.peerId !== myPeerId) return;
+
+        // QA-03 / SEC-02: Slot 1 is reserved exclusively for the host
+        if (slot === 1 && targetPeerId !== room.hostPeerId) {
+          return;
+        }
 
         // Clear any other slot targetPeerId held previously
         for (let i = 1; i <= 4; i++) {
@@ -578,7 +650,8 @@ export function attachSignalingServer(server: Server) {
 
         if (!ownedSlot && myPeerId !== room.hostPeerId) {
           const peerInfo = room.peers.get(myPeerId);
-          let freeSlot = [2, 3, 4, 1].find((s) => !room.slots[s]);
+          // QA-03: Auto-assign only from [2, 3, 4], NEVER Slot 1!
+          let freeSlot = [2, 3, 4].find((s) => !room.slots[s]);
           if (!freeSlot && !room.slots[2]?.isHost) {
             freeSlot = 2;
           }
@@ -593,11 +666,16 @@ export function attachSignalingServer(server: Server) {
           }
         }
 
-        const effectivePlayerIndex = ownedSlot || (myPeerId === room.hostPeerId ? 1 : 2);
+        // Slot 1 is host-only; guests can only use their owned slot (2, 3, 4)
+        const effectivePlayerIndex = myPeerId === room.hostPeerId ? 1 : (ownedSlot || 2);
+        if (effectivePlayerIndex === 1 && myPeerId !== room.hostPeerId) {
+          return;
+        }
+
         const rawInput = (msg.input && typeof msg.input === "object") ? (msg.input as Record<string, unknown>) : {};
         const sanitizedInput = {
           ...rawInput,
-          playerIndex: myPeerId === room.hostPeerId ? (Number(rawInput.playerIndex) || 1) : effectivePlayerIndex,
+          playerIndex: effectivePlayerIndex,
         };
 
         const hostPeer = room.peers.get(room.hostPeerId);
@@ -616,10 +694,16 @@ export function attachSignalingServer(server: Server) {
       if (type === "video-frame") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
         const frame = msg.frame as string;
-        if (!sessionCode) return;
+        if (!sessionCode || !frame) return;
 
         const room = rooms.get(sessionCode);
-        if (!room || !frame) return;
+        if (!room) return;
+
+        // Security: only host may broadcast game stream frames
+        if (myPeerId !== room.hostPeerId) return;
+
+        // Size cap: max 2 MB per frame
+        if (frame.length > 2 * 1024 * 1024) return;
 
         broadcastToRoom(
           room,
@@ -638,10 +722,16 @@ export function attachSignalingServer(server: Server) {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
         const pcm = msg.pcm as string;
         const sampleRate = msg.sampleRate as number;
-        if (!sessionCode) return;
+        if (!sessionCode || !pcm) return;
 
         const room = rooms.get(sessionCode);
-        if (!room || !pcm) return;
+        if (!room) return;
+
+        // Security: only host may broadcast game audio chunks
+        if (myPeerId !== room.hostPeerId) return;
+
+        // Size cap: max 512 KB per audio chunk
+        if (pcm.length > 512 * 1024) return;
 
         broadcastToRoom(
           room,

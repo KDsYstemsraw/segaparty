@@ -142,33 +142,33 @@ router.post("/sessions/:code/join", async (req, res) => {
 
   const players = session.players as Array<{ id: string; name: string; isHost: boolean; playerIndex: number }>;
 
-  const existingIndex = players.findIndex(
-    (p) => p.name.trim().toLowerCase() === playerName.trim().toLowerCase(),
-  );
+  let finalPlayerName = playerName.trim();
+  const nameExists = (n: string) =>
+    players.some((p) => p.name.trim().toLowerCase() === n.trim().toLowerCase());
 
-  let playerId: string;
-  let updatedPlayers: Array<{ id: string; name: string; isHost: boolean; playerIndex: number }>;
-  let updatedMaxPlayers = session.maxPlayers;
-
-  if (existingIndex !== -1) {
-    playerId = players[existingIndex].id || generatePlayerId();
-    players[existingIndex].name = playerName;
-    players[existingIndex].id = playerId;
-    updatedPlayers = [...players];
-  } else {
-    playerId = generatePlayerId();
-    const playerIndex = players.length < session.maxPlayers ? players.length + 1 : 0;
-    updatedMaxPlayers = Math.max(session.maxPlayers, players.length + 1);
-    updatedPlayers = [
-      ...players,
-      {
-        id: playerId,
-        name: playerName,
-        isHost: false,
-        playerIndex,
-      },
-    ];
+  // SEC-03: Prevent player ID leakage and host takeover via display name collision.
+  // If a player with the same name already exists (or someone attempts to join with the host's name),
+  // append a discriminator suffix (e.g. "Sonic (2)") so existing identities and host tokens are never stolen.
+  if (nameExists(finalPlayerName)) {
+    let suffix = 2;
+    while (nameExists(`${finalPlayerName} (${suffix})`)) {
+      suffix++;
+    }
+    finalPlayerName = `${finalPlayerName} (${suffix})`;
   }
+
+  const playerId = generatePlayerId();
+  const playerIndex = players.length < session.maxPlayers ? players.length + 1 : 0;
+  const updatedMaxPlayers = Math.max(session.maxPlayers, players.length + 1);
+  const updatedPlayers = [
+    ...players,
+    {
+      id: playerId,
+      name: finalPlayerName,
+      isHost: false,
+      playerIndex,
+    },
+  ];
 
   if (hasDatabase && db) {
     await db

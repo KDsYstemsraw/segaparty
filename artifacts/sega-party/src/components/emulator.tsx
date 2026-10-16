@@ -17,6 +17,7 @@ export interface EmulatorProps {
   onAudioTrackAdded?: (track: MediaStreamTrack) => void;
   onVideoFrame?: (dataUrl: string) => void;
   onAudioChunk?: (pcmBase64: string, sampleRate: number) => void;
+  hasActiveRtcPeers?: boolean;
 }
 
 declare global {
@@ -37,6 +38,7 @@ declare global {
     EJS_Buttons?: Record<string, { visible: boolean }>;
     __emulatorAudioStream?: MediaStream | null;
     __onEmulatorAudioChunk?: (pcmBase64: string, sampleRate: number) => void;
+    __hasActiveRtcPeers?: boolean;
   }
 }
 
@@ -75,6 +77,7 @@ interface OpenALContext {
 }
 
 let activeAudioCtx: ExtendedAudioContext | null = null;
+const trackedAudioContexts = new Set<ExtendedAudioContext>();
 
 function getOpenALContext(): OpenALContext | null {
   if (typeof window === "undefined") return null;
@@ -103,6 +106,7 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
   track?: MediaStreamTrack;
 } {
   activeAudioCtx = audioCtx;
+  trackedAudioContexts.add(audioCtx);
 
   if (!audioCtx.__captureBus) {
     const bus = audioCtx.createGain();
@@ -199,6 +203,7 @@ function attachOpenALAudio(): MediaStreamTrack | null {
   const alCtx = getOpenALContext();
   if (alCtx?.audioCtx) {
     const audioCtx = alCtx.audioCtx;
+    trackedAudioContexts.add(audioCtx);
     const { bus, track } = ensureCaptureBus(audioCtx);
 
     if (audioCtx.state === "suspended") {
@@ -265,6 +270,7 @@ function installAudioCaptureHook() {
       const ctx = this.context as ExtendedAudioContext | undefined;
       const isInternal = (this as unknown as { __isInternalAudio?: boolean }).__isInternalAudio;
       if (ctx && destination === ctx.destination && !isInternal) {
+        trackedAudioContexts.add(ctx);
         if (ctx.state === "suspended") {
           ctx.resume().then(() => {
             console.debug("[audio-host] ctx resumed");
@@ -303,7 +309,10 @@ function teardownEmulator() {
     EJS_emulator?: {
       callEvent?: (event: string) => void;
       gameManager?: { functions?: { toggleMainLoop?: (val: number) => void } };
-      Module?: { abort?: () => void };
+      Module?: {
+        abort?: () => void;
+        AL?: { currentCtx?: OpenALContext };
+      };
       elements?: { parent?: HTMLElement };
     };
     Module?: { abort?: () => void };
@@ -345,25 +354,93 @@ function teardownEmulator() {
   document.querySelectorAll('script[src*="emulatorjs/"]').forEach((s) => s.remove());
   document.querySelectorAll('head link[href*="emulatorjs/"]').forEach((s) => s.remove());
 
-  // 5. Clean up audio streams
+  // 5. Clean up audio contexts & streams (QA-02 AudioContext leak fix)
+  const contextsToClose = new Set<ExtendedAudioContext>();
+  if (activeAudioCtx) contextsToClose.add(activeAudioCtx);
+  const alCtx = getOpenALContext();
+  if (alCtx?.audioCtx) contextsToClose.add(alCtx.audioCtx);
+  const ejsAL = win.EJS_emulator?.Module?.AL?.currentCtx?.audioCtx;
+  if (ejsAL) contextsToClose.add(ejsAL);
+  for (const ctx of trackedAudioContexts) {
+    if (ctx) contextsToClose.add(ctx);
+  }
+  trackedAudioContexts.clear();
   activeAudioCtx = null;
+
+  for (const ctx of contextsToClose) {
+    try {
+      if (ctx.__pcmTap) {
+        ctx.__pcmTap.onaudioprocess = null;
+        try {
+          ctx.__pcmTap.disconnect();
+        } catch {}
+        delete ctx.__pcmTap;
+      }
+      if (ctx.__silentGain) {
+        try {
+          ctx.__silentGain.disconnect();
+        } catch {}
+        delete ctx.__silentGain;
+      }
+      if (ctx.__captureBus) {
+        try {
+          ctx.__captureBus.disconnect();
+        } catch {}
+        delete ctx.__captureBus;
+      }
+      if (ctx.__streamDest) {
+        try {
+          ctx.__streamDest.stream?.getTracks().forEach((t) => t.stop());
+          ctx.__streamDest.disconnect();
+        } catch {}
+        delete ctx.__streamDest;
+      }
+      delete ctx.__attachedSources;
+
+      if (ctx.state !== "closed" && typeof ctx.close === "function") {
+        ctx.close().catch(() => {});
+      }
+    } catch (e) {
+      console.warn("[audio-teardown] error closing audio context:", e);
+    }
+  }
+
   if (window.__emulatorAudioStream) {
     window.__emulatorAudioStream.getTracks().forEach((t) => t.stop());
     window.__emulatorAudioStream = null;
   }
   delete (window as unknown as { __onEmulatorAudioChunk?: unknown }).__onEmulatorAudioChunk;
 
-  // 6. Delete global emulator instances
+  // 6. Delete global emulator instances and residual global properties
+  if (win.EJS_emulator) {
+    try {
+      for (const key of Object.keys(win.EJS_emulator)) {
+        try {
+          delete (win.EJS_emulator as Record<string, unknown>)[key];
+        } catch {}
+      }
+    } catch {}
+  }
   delete (window as unknown as { EJS_emulator?: unknown }).EJS_emulator;
   delete (window as unknown as { EmulatorJS?: unknown }).EmulatorJS;
   delete (window as unknown as { Module?: unknown }).Module;
   delete (window as unknown as { AL?: unknown }).AL;
   delete (window as unknown as { FS?: unknown }).FS;
+  delete (window as unknown as Record<string, unknown>).EJS_player;
+  delete (window as unknown as Record<string, unknown>).EJS_core;
+  delete (window as unknown as Record<string, unknown>).EJS_gameUrl;
+  delete (window as unknown as Record<string, unknown>).EJS_pathtodata;
+  delete (window as unknown as Record<string, unknown>).EJS_startOnLoaded;
   delete (window as unknown as Record<string, unknown>).EJS_onGameStart;
   delete (window as unknown as Record<string, unknown>).EJS_on;
   delete (window as unknown as Record<string, unknown>).EJS_defaultControls;
+  delete (window as unknown as Record<string, unknown>).EJS_disableDatabases;
+  delete (window as unknown as Record<string, unknown>).EJS_disableLocalStorage;
+  delete (window as unknown as Record<string, unknown>).EJS_defaultOptions;
+  delete (window as unknown as Record<string, unknown>).EJS_threads;
   delete (window as unknown as Record<string, unknown>).__useRetroPartyFullscreen;
   delete (window as unknown as Record<string, unknown>).EJS_Buttons;
+  delete (window as unknown as Record<string, unknown>).__hasActiveRtcPeers;
 }
 
 export function Emulator({
@@ -376,11 +453,15 @@ export function Emulator({
   onAudioTrackAdded,
   onVideoFrame,
   onAudioChunk,
+  hasActiveRtcPeers,
 }: EmulatorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamReadyFired = useRef(false);
   const audioTrackFiredRef = useRef(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const hasActiveRtcPeersRef = useRef(hasActiveRtcPeers);
+  hasActiveRtcPeersRef.current = hasActiveRtcPeers;
 
   const onStreamReadyRef = useRef(onStreamReady);
   onStreamReadyRef.current = onStreamReady;
@@ -517,7 +598,7 @@ export function Emulator({
 
     let audioPollId: ReturnType<typeof setInterval> | null = null;
 
-    // WebSocket / Broadcast frame capture canvas & interval (~15 FPS)
+    // WebSocket / Broadcast frame capture canvas & interval (~7 FPS fallback when WebRTC is inactive)
     let frameCanvas: HTMLCanvasElement | null = null;
     let frameCtx: CanvasRenderingContext2D | null = null;
     let frameBroadcastId: ReturnType<typeof setInterval> | null = null;
@@ -531,7 +612,7 @@ export function Emulator({
       const sourceCanvas = document.querySelector("#game canvas") as HTMLCanvasElement | null;
       if (!sourceCanvas || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) return false;
 
-      // Start 15 FPS frame broadcast interval if onVideoFrame is requested
+      // Start ~7 FPS (140ms) frame broadcast interval if onVideoFrame is requested
       if (!frameBroadcastId) {
         frameCanvas = document.createElement("canvas");
         frameCanvas.width = 320;
@@ -543,15 +624,19 @@ export function Emulator({
 
         frameBroadcastId = setInterval(() => {
           if (!onVideoFrameRef.current || !sourceCanvas || !frameCtx || !frameCanvas) return;
+          // Dual-Transport Frame Throttling (QA-01):
+          // When WebRTC video stream is active and serving peers, suppress WebSocket JPEG frame broadcasting
+          // completely to avoid redundant ~350 KB/s TCP traffic and player input starvation.
+          if (hasActiveRtcPeersRef.current || window.__hasActiveRtcPeers) return;
           if (sourceCanvas.width === 0 || sourceCanvas.height === 0) return;
           try {
             frameCtx.drawImage(sourceCanvas, 0, 0, 320, 224);
-            const dataUrl = frameCanvas.toDataURL("image/jpeg", 0.6);
+            const dataUrl = frameCanvas.toDataURL("image/jpeg", 0.55);
             onVideoFrameRef.current(dataUrl);
           } catch {
             // Ignore capture error if canvas temporarily not ready
           }
-        }, 66);
+        }, 140);
       }
 
       if (streamReadyFired.current) return true;

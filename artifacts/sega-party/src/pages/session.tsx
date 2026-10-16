@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useLocation } from "wouter";
 import { useGetSession, useJoinSession, getGetSessionQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -42,7 +43,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import {
   Copy,
   Users,
@@ -70,6 +70,7 @@ import {
   UserPlus,
   Check,
   MessageSquare,
+  X,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -110,6 +111,7 @@ export default function SessionPage() {
   const wsImgRef = useRef<HTMLImageElement | null>(null);
   const nextAudioTimeRef = useRef<number>(0);
   const rtcVideoActiveRef = useRef(false);
+  const lastVideoTimeRef = useRef<{ time: number; timestamp: number }>({ time: 0, timestamp: 0 });
 
   const [connectionStatus, setConnectionStatus] = useState<"idle" | "connecting" | "connected" | "error">("idle");
   const [webrtcStatus, setWebrtcStatus] = useState<{ ice: string; tracks: number; lastSignal: string }>({
@@ -127,6 +129,18 @@ export default function SessionPage() {
   const [crtFilter, setCrtFilter] = useState(false);
   const [showTouchGamepad, setShowTouchGamepad] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [stageControlsVisible, setStageControlsVisible] = useState(false);
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setIsTouchDevice("ontouchstart" in window || navigator.maxTouchPoints > 0);
+    }
+  }, []);
+
+  const portalTarget =
+    (typeof document !== "undefined" && (document.fullscreenElement as HTMLElement)) ||
+    (typeof document !== "undefined" ? document.body : null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
@@ -139,6 +153,16 @@ export default function SessionPage() {
   const [joinPromptOpen, setJoinPromptOpen] = useState(false);
   const [romPickerOpen, setRomPickerOpen] = useState(false);
   const [newRomFile, setNewRomFile] = useState<File | null>(null);
+
+  useEffect(() => {
+    if (!romPickerOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setRomPickerOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [romPickerOpen]);
+
   const [guestNameInput, setGuestNameInput] = useState(() => {
     return DEFAULT_NICKNAMES[Math.floor(Math.random() * DEFAULT_NICKNAMES.length)];
   });
@@ -149,6 +173,8 @@ export default function SessionPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeRomName, setActiveRomName] = useState<string | null>(getRomName());
   const [activeCore, setActiveCore] = useState<string>(() => getRomCore() || "segaMD");
+  const activeCoreRef = useRef(activeCore);
+  activeCoreRef.current = activeCore;
   const [newRomCore, setNewRomCore] = useState<string>("segaMD");
   const consoleSys = getConsoleSystem(activeCore);
   const [currentRomUrl, setCurrentRomUrl] = useState<string | null>(() => getRomUrl());
@@ -312,6 +338,67 @@ export default function SessionPage() {
   }, [controlsOpen, chatOverlayOpen, releaseAllHeldButtons]);
 
   useGamepad(effectiveSlot, handleInputEvent, handleButtonActivity);
+
+  // Disconnect & kick ghost key release sweep helper (QA-05)
+  const sweepSlotInputs = useCallback((slotNumber: number) => {
+    try {
+      const core = activeCoreRef.current || "segaMD";
+      const standardActions = [
+        "up",
+        "down",
+        "left",
+        "right",
+        "a",
+        "b",
+        "c",
+        "x",
+        "y",
+        "z",
+        "start",
+        "select",
+        "mode",
+        "l",
+        "r",
+        "l2",
+        "r2",
+        "l3",
+        "r3",
+      ];
+      const consoleActions = getConsoleActions(core).map((a) => a.id);
+      const allActions = Array.from(new Set([...standardActions, ...consoleActions]));
+
+      for (const action of allActions) {
+        simulateEmulatorInput(slotNumber, action, false, core);
+      }
+    } catch (e) {
+      console.warn(`[sweepSlotInputs] Failed to sweep inputs for slot ${slotNumber}:`, e);
+    }
+  }, []);
+
+  // WebRTC Stalled Video Watchdog: falls back to WebSocket image stream if WebRTC video stalls or freezes (QA-07)
+  useEffect(() => {
+    if (isHost) return;
+
+    const interval = setInterval(() => {
+      if (!rtcVideoActiveRef.current) return;
+
+      const video = videoRef.current;
+      const now = Date.now();
+      const lastUpdate = lastVideoTimeRef.current.timestamp;
+
+      // If video element is paused or currentTime hasn't moved in > 1800ms
+      if (
+        (video && video.paused) ||
+        (lastUpdate > 0 && now - lastUpdate > 1800)
+      ) {
+        console.debug("[WebRTC Watchdog] Video stalled or frozen; unmasking WebSocket fallback stream");
+        rtcVideoActiveRef.current = false;
+        setRtcVideoActive(false);
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [isHost]);
 
   // Send signaling helper
   const sendSignal = useCallback(
@@ -480,17 +567,30 @@ export default function SessionPage() {
               console.debug(`[audio] Track received from ${fromPeerId}: kind=${e.track.kind}, id=${e.track.id}, readyState=${e.track.readyState}`);
               setWebrtcStatus((prev) => ({ ...prev, tracks: prev.tracks + 1 }));
 
+              if (e.track.kind === "video") {
+                lastVideoTimeRef.current = { time: 0, timestamp: 0 };
+              }
+
               setRemoteStream((prev) => {
                 let combined: MediaStream;
                 if (!prev) {
-                  combined = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
-                } else {
-                  const tracks = prev.getTracks();
-                  if (!tracks.some((t) => t.id === e.track.id)) {
-                    combined = new MediaStream([...tracks, e.track]);
-                  } else {
-                    combined = prev;
+                  const initialTracks = (e.streams && e.streams[0] ? e.streams[0].getTracks() : [e.track])
+                    .filter((t) => t.readyState !== "ended");
+                  if (!initialTracks.some((t) => t.id === e.track.id)) {
+                    initialTracks.push(e.track);
                   }
+                  combined = new MediaStream(initialTracks);
+                } else {
+                  // Filter out ended tracks and stale tracks of the same kind (QA-06)
+                  const survivingTracks = prev.getTracks().filter((t) => {
+                    if (t.readyState === "ended") return false;
+                    if (t.kind === e.track.kind && t.id !== e.track.id) return false;
+                    return true;
+                  });
+                  if (!survivingTracks.some((t) => t.id === e.track.id)) {
+                    survivingTracks.push(e.track);
+                  }
+                  combined = new MediaStream(survivingTracks);
                 }
 
                 if (videoRef.current) {
@@ -516,6 +616,19 @@ export default function SessionPage() {
               };
 
               e.track.addEventListener("unmute", onUnmute, { once: true });
+
+              e.track.onended = () => {
+                console.debug(`[webrtc] Track ended: kind=${e.track.kind}, id=${e.track.id}`);
+                setRemoteStream((cur) => {
+                  if (!cur) return null;
+                  const active = cur.getTracks().filter((t) => t.id !== e.track.id && t.readyState !== "ended");
+                  const nextStream = active.length > 0 ? new MediaStream(active) : null;
+                  if (videoRef.current && videoRef.current.srcObject !== nextStream) {
+                    videoRef.current.srcObject = nextStream;
+                  }
+                  return nextStream;
+                });
+              };
             };
 
             pc.ondatachannel = (e) => {
@@ -739,7 +852,21 @@ export default function SessionPage() {
         const msg = JSON.parse(event.data as string) as Record<string, unknown>;
 
         if (msg.type === "room-state") {
-          if (msg.slots) setSlots(msg.slots as SlotState);
+          if (msg.slots) {
+            const incomingSlots = msg.slots as SlotState;
+            if (isHostRef.current) {
+              const prevSlots = slotAssignmentsRef.current;
+              for (let s = 1; s <= 4; s++) {
+                const prevOccupant = prevSlots[s];
+                const newOccupant = incomingSlots[s];
+                if (prevOccupant?.peerId && (!newOccupant || newOccupant.peerId !== prevOccupant.peerId)) {
+                  sweepSlotInputs(s);
+                }
+              }
+            }
+            slotAssignmentsRef.current = incomingSlots;
+            setSlots(incomingSlots);
+          }
           if (msg.peers) {
             const peers = msg.peers as ParticipantInfo[];
             setParticipants(peers);
@@ -751,7 +878,21 @@ export default function SessionPage() {
         }
 
         if (msg.type === "slot-state") {
-          if (msg.slots) setSlots(msg.slots as SlotState);
+          if (msg.slots) {
+            const incomingSlots = msg.slots as SlotState;
+            if (isHostRef.current) {
+              const prevSlots = slotAssignmentsRef.current;
+              for (let s = 1; s <= 4; s++) {
+                const prevOccupant = prevSlots[s];
+                const newOccupant = incomingSlots[s];
+                if (prevOccupant?.peerId && (!newOccupant || newOccupant.peerId !== prevOccupant.peerId)) {
+                  sweepSlotInputs(s);
+                }
+              }
+            }
+            slotAssignmentsRef.current = incomingSlots;
+            setSlots(incomingSlots);
+          }
         }
 
         if (msg.type === "slot-request") {
@@ -944,6 +1085,7 @@ export default function SessionPage() {
 
         if (msg.type === "no-host" && !isHost) {
           hostPeerIdRef.current = null;
+          lastVideoTimeRef.current = { time: 0, timestamp: 0 };
           setRemoteStream(null);
           setHasWsStream(false);
           setRtcVideoActive(false);
@@ -982,6 +1124,16 @@ export default function SessionPage() {
           }
           pendingGuestsRef.current.delete(peerId);
           iceCandidateQueueRef.current.delete(peerId);
+
+          if (isHostRef.current) {
+            // Sweep all controller slots previously assigned to this peer (QA-05)
+            for (let s = 1; s <= 4; s++) {
+              if (slotAssignmentsRef.current[s]?.peerId === peerId) {
+                sweepSlotInputs(s);
+              }
+            }
+          }
+
           setParticipants((prev) => {
             const next = prev.filter((p) => p.peerId !== peerId);
             participantsRef.current = next;
@@ -992,6 +1144,7 @@ export default function SessionPage() {
           if (!isHost && peerId === hostPeerIdRef.current) {
             hostPeerIdRef.current = null;
             guestDataChannelRef.current = null;
+            lastVideoTimeRef.current = { time: 0, timestamp: 0 };
             setRemoteStream(null);
             setHasWsStream(false);
             setRtcVideoActive(false);
@@ -1130,22 +1283,46 @@ export default function SessionPage() {
     }
   }, [sendSignal]);
 
-  // Host dual-transport video frame broadcasting over WebSocket for instant guest view
+  // Host dual-transport video frame broadcasting over WebSocket for instant guest view (throttled when RTC is active, QA-01)
   const handleVideoFrame = useCallback(
     (dataUrl: string) => {
-      if (
-        isHost &&
-        wsRef.current?.readyState === WebSocket.OPEN &&
-        (participantsRef.current.length > 1 || peerConnsRef.current.size > 0)
-      ) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: "video-frame",
-            sessionCode: code,
-            frame: dataUrl,
-          }),
-        );
+      if (!isHost || wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+      const guests = participantsRef.current.filter((p) => p.peerId !== myPeerId.current);
+      if (guests.length === 0 && peerConnsRef.current.size === 0) return;
+
+      // Only broadcast WS video frame if at least one guest is not yet fully connected via WebRTC
+      let anyGuestNeedsFallback = false;
+      if (guests.length > 0) {
+        anyGuestNeedsFallback = guests.some((guest) => {
+          const pc = peerConnsRef.current.get(guest.peerId);
+          if (!pc) return true;
+          const isConnected =
+            pc.connectionState === "connected" ||
+            (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed");
+          return !isConnected;
+        });
+      } else {
+        for (const [, pc] of peerConnsRef.current) {
+          const isConnected =
+            pc.connectionState === "connected" ||
+            (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed");
+          if (!isConnected) {
+            anyGuestNeedsFallback = true;
+            break;
+          }
+        }
       }
+
+      if (!anyGuestNeedsFallback) return;
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: "video-frame",
+          sessionCode: code,
+          frame: dataUrl,
+        }),
+      );
     },
     [code, isHost],
   );
@@ -1824,6 +2001,11 @@ export default function SessionPage() {
               ) : romUrl ? (
                 <div
                   ref={videoContainerRef}
+                  onClick={() => {
+                    if (isTouchDevice || showTouchGamepad) {
+                      setStageControlsVisible((v) => !v);
+                    }
+                  }}
                   className={cn(
                     "w-full relative overflow-hidden transition-all group",
                     isFullscreen
@@ -1863,7 +2045,15 @@ export default function SessionPage() {
                   />
 
                   {/* Floating Frosted Glass In-Stream Controls Overlay (Host) */}
-                  <div className="absolute bottom-14 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-[90] shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className={cn(
+                      "absolute bottom-14 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-[90] shadow-xl transition-opacity duration-200",
+                      showTouchGamepad || isTouchDevice || stageControlsVisible
+                        ? "opacity-100"
+                        : "opacity-0 group-hover:opacity-100"
+                    )}
+                  >
                     {/* Toggle EmulatorJS Bottom Settings Bar */}
                     <Button
                       size="icon"
@@ -1971,6 +2161,9 @@ export default function SessionPage() {
                   if (isMuted || audioBlocked) {
                     unlockAudio();
                   }
+                  if (isTouchDevice || showTouchGamepad) {
+                    setStageControlsVisible((v) => !v);
+                  }
                 }}
                 className={cn(
                   "bg-black overflow-hidden relative flex items-center justify-center cursor-pointer group",
@@ -2015,12 +2208,34 @@ export default function SessionPage() {
                         }
                       }}
                       onTimeUpdate={(e) => {
-                        if (e.currentTarget.videoWidth > 0 && e.currentTarget.currentTime > 0) {
-                          setRtcVideoActive(true);
-                          rtcVideoActiveRef.current = true;
+                        const curTime = e.currentTarget.currentTime;
+                        if (curTime !== lastVideoTimeRef.current.time) {
+                          lastVideoTimeRef.current = { time: curTime, timestamp: Date.now() };
+                        }
+                        if (e.currentTarget.videoWidth > 0 && curTime > 0) {
+                          if (!rtcVideoActiveRef.current) {
+                            setRtcVideoActive(true);
+                            rtcVideoActiveRef.current = true;
+                          }
+                        }
+                      }}
+                      onPause={() => {
+                        if (!isHost) {
+                          setRtcVideoActive(false);
+                          rtcVideoActiveRef.current = false;
+                        }
+                      }}
+                      onWaiting={() => {
+                        if (!isHost) {
+                          setRtcVideoActive(false);
+                          rtcVideoActiveRef.current = false;
                         }
                       }}
                       onPlaying={(e) => {
+                        lastVideoTimeRef.current = {
+                          time: e.currentTarget.currentTime,
+                          timestamp: Date.now(),
+                        };
                         if (e.currentTarget.videoWidth > 0) {
                           setRtcVideoActive(true);
                           rtcVideoActiveRef.current = true;
@@ -2061,7 +2276,12 @@ export default function SessionPage() {
                     {/* Floating Frosted Glass In-Stream Controls Overlay (Guest) */}
                     <div
                       onClick={(e) => e.stopPropagation()}
-                      className="absolute bottom-14 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-[90] shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                      className={cn(
+                        "absolute bottom-14 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-[90] shadow-xl transition-opacity duration-200",
+                        showTouchGamepad || isTouchDevice || stageControlsVisible
+                          ? "opacity-100"
+                          : "opacity-0 group-hover:opacity-100"
+                      )}
                     >
                       {/* Volume Slider with Animated Speaker Wave */}
                       <div className="flex items-center gap-1.5">
@@ -2393,6 +2613,7 @@ export default function SessionPage() {
                 playerSlot={effectiveSlot}
                 onInput={handleInputEvent}
                 onActivity={handleButtonActivity}
+                activeCore={activeCore}
               />
             </div>
           )}
@@ -2551,110 +2772,139 @@ export default function SessionPage() {
       {/* Invite Friends & QR Code Modal */}
       <InviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} sessionCode={session.code} />
 
-      {/* Host ROM Picker Dialog */}
-      <Dialog open={romPickerOpen} onOpenChange={setRomPickerOpen}>
-        <DialogContent className="max-w-lg bg-card border-primary/60 font-sans shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="font-display text-2xl text-primary flex items-center gap-2">
-              <FolderOpen className="w-6 h-6 text-accent" /> Load Game ROM
-            </DialogTitle>
-            <DialogDescription className="font-sans text-xs text-muted-foreground">
-              Select any supported ROM or disc image from your computer to run and stream live to all guests.
-            </DialogDescription>
-          </DialogHeader>
+      {/* Host ROM Picker Dialog (Rendered with createPortal at z-[200] to sit cleanly above fullscreen) */}
+      {romPickerOpen && portalTarget && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setRomPickerOpen(false);
+          }}
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md p-3 sm:p-4 overflow-y-auto font-sans select-none"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-lg rounded-2xl border border-primary/60 bg-card p-6 font-sans shadow-2xl my-auto text-card-foreground"
+          >
+            <button
+              type="button"
+              onClick={() => setRomPickerOpen(false)}
+              className="absolute right-4 top-4 rounded-lg p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 transition-colors z-10"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
 
-          <div className="my-3 space-y-3">
-            <RomFilePicker
-              selectedFile={newRomFile}
-              onFileSelected={(file) => {
-                setNewRomFile(file);
-                if (file) {
-                  const detected = detectConsoleFromFilename(file.name);
-                  setNewRomCore(detected.id);
-                }
-              }}
-            />
-
-            <ConsolePicker
-              selectedCore={newRomCore}
-              onSelectCore={setNewRomCore}
-              detectedCore={newRomFile ? detectConsoleFromFilename(newRomFile.name).id : undefined}
-            />
-
-            {newRomFile && (
-              <Button
-                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold"
-                onClick={() => handleLoadRomFile(newRomFile)}
-              >
-                Launch & Stream Game
-              </Button>
-            )}
-          </div>
-
-          <div className="flex justify-between items-center pt-2 border-t border-border">
-            {activeRomName ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-destructive/50 text-destructive hover:bg-destructive hover:text-destructive-foreground font-bold text-xs"
-                onClick={handleUnloadRom}
-              >
-                Eject Current Game
-              </Button>
-            ) : <div />}
-            <Button variant="ghost" size="sm" onClick={() => setRomPickerOpen(false)}>
-              Close
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-
-      {/* Quick Join Dialog (when visiting via URL directly) */}
-      <Dialog
-        open={joinPromptOpen}
-        onOpenChange={(open) => {
-          setJoinPromptOpen(open);
-          if (!open) {
-            hasDismissedPrompt.current = true;
-          }
-        }}
-      >
-        <DialogContent className="max-w-md bg-card border-primary/60 font-sans shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="font-display text-2xl text-primary flex items-center gap-2">
-              <Gamepad2 className="w-6 h-6 text-accent" /> Join RetroParty Room
-            </DialogTitle>
-            <DialogDescription className="font-sans text-xs text-muted-foreground">
-              You were invited to room <span className="font-bold text-foreground font-mono">{code}</span>. Enter your nickname to jump in!
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleQuickJoinSubmit} className="space-y-4 my-2">
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                Your Nickname
-              </label>
-              <Input
-                value={guestNameInput}
-                onChange={(e) => setGuestNameInput(e.target.value)}
-                placeholder="PLAYER NAME"
-                maxLength={20}
-                className="bg-muted/40 border-primary/40 focus-visible:ring-primary font-bold text-base h-11"
-                autoFocus
-              />
+            <div className="flex flex-col space-y-1.5 text-center sm:text-left">
+              <h2 className="font-display text-2xl text-primary flex items-center gap-2">
+                <FolderOpen className="w-6 h-6 text-accent" /> Load Game ROM
+              </h2>
+              <p className="font-sans text-xs text-muted-foreground">
+                Select any supported ROM or disc image from your computer to run and stream live to all guests.
+              </p>
             </div>
 
-            <Button
-              type="submit"
-              disabled={joinSession.isPending || !guestNameInput.trim()}
-              className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground font-bold uppercase tracking-wider text-sm shadow-[0_0_15px_rgba(0,71,187,0.4)]"
-            >
-              {joinSession.isPending ? "Joining..." : "Enter Room"}
-            </Button>
-          </form>
-        </DialogContent>
-      </Dialog>
+            <div className="my-3 space-y-3">
+              <RomFilePicker
+                selectedFile={newRomFile}
+                onFileSelected={(file) => {
+                  setNewRomFile(file);
+                  if (file) {
+                    const detected = detectConsoleFromFilename(file.name);
+                    setNewRomCore(detected.id);
+                  }
+                }}
+              />
+
+              <ConsolePicker
+                selectedCore={newRomCore}
+                onSelectCore={setNewRomCore}
+                detectedCore={newRomFile ? detectConsoleFromFilename(newRomFile.name).id : undefined}
+              />
+
+              {newRomFile && (
+                <Button
+                  className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold"
+                  onClick={() => handleLoadRomFile(newRomFile)}
+                >
+                  Launch & Stream Game
+                </Button>
+              )}
+            </div>
+
+            <div className="flex justify-between items-center pt-2 border-t border-border">
+              {activeRomName ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-destructive/50 text-destructive hover:bg-destructive hover:text-destructive-foreground font-bold text-xs"
+                  onClick={handleUnloadRom}
+                >
+                  Eject Current Game
+                </Button>
+              ) : <div />}
+              <Button variant="ghost" size="sm" onClick={() => setRomPickerOpen(false)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>,
+        portalTarget
+      )}
+
+      {/* Quick Join Dialog (when visiting via URL directly) */}
+      {joinPromptOpen && portalTarget && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setJoinPromptOpen(false);
+              hasDismissedPrompt.current = true;
+            }
+          }}
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md p-3 sm:p-4 overflow-y-auto font-sans select-none"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-md rounded-2xl border border-primary/60 bg-card p-6 font-sans shadow-2xl my-auto text-card-foreground"
+          >
+            <div className="flex flex-col space-y-1.5 text-center sm:text-left">
+              <h2 className="font-display text-2xl text-primary flex items-center gap-2">
+                <Gamepad2 className="w-6 h-6 text-accent" /> Join RetroParty Room
+              </h2>
+              <p className="font-sans text-xs text-muted-foreground">
+                You were invited to room <span className="font-bold text-foreground font-mono">{code}</span>. Enter your nickname to jump in!
+              </p>
+            </div>
+
+            <form onSubmit={handleQuickJoinSubmit} className="space-y-4 my-2">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  Your Nickname
+                </label>
+                <Input
+                  value={guestNameInput}
+                  onChange={(e) => setGuestNameInput(e.target.value)}
+                  placeholder="PLAYER NAME"
+                  maxLength={20}
+                  className="bg-muted/40 border-primary/40 focus-visible:ring-primary font-bold text-base h-11"
+                  autoFocus
+                />
+              </div>
+
+              <Button
+                type="submit"
+                disabled={joinSession.isPending || !guestNameInput.trim()}
+                className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground font-bold uppercase tracking-wider text-sm shadow-[0_0_15px_rgba(0,71,187,0.4)]"
+              >
+                {joinSession.isPending ? "Joining..." : "Enter Room"}
+              </Button>
+            </form>
+          </div>
+        </div>,
+        portalTarget
+      )}
     </div>
   );
 }

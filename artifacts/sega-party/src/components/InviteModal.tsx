@@ -1,13 +1,7 @@
-import React, { useState } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
+import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
-import { Copy, Users, Check, Smartphone, Sparkles, QrCode, Globe } from "lucide-react";
+import { Copy, Users, Check, Smartphone, Sparkles, Globe, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 export interface InviteModalProps {
@@ -21,6 +15,17 @@ export function InviteModal({ open, onClose, sessionCode }: InviteModalProps) {
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [showQr, setShowQr] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
 
   const inviteUrl =
     typeof window !== "undefined"
@@ -52,24 +57,50 @@ export function InviteModal({ open, onClose, sessionCode }: InviteModalProps) {
     });
   };
 
-  return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg rounded-2xl border-white/15 bg-card/95 backdrop-blur-xl font-sans shadow-2xl p-0 overflow-hidden">
+  const portalTarget =
+    (typeof document !== "undefined" && (document.fullscreenElement as HTMLElement)) ||
+    (typeof document !== "undefined" ? document.body : null);
+
+  if (!open || !portalTarget) return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-md p-3 sm:p-4 overflow-y-auto font-sans select-none"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-lg rounded-2xl border border-white/15 bg-card/95 backdrop-blur-xl font-sans shadow-2xl p-0 overflow-hidden my-auto text-card-foreground"
+      >
         {/* Top Gradient Banner */}
         <div className="h-1.5 w-full bg-gradient-to-r from-primary via-cyan-400 to-accent" />
 
+        {/* Close Button at top-right */}
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 rounded-lg p-1.5 text-muted-foreground hover:text-white hover:bg-white/10 transition-colors z-10"
+          aria-label="Close"
+        >
+          <X className="w-4 h-4" />
+        </button>
+
         <div className="p-5 sm:p-6 space-y-5">
-          <DialogHeader className="text-center space-y-1.5">
+          <div className="text-center space-y-1.5">
             <div className="w-11 h-11 rounded-2xl bg-primary/20 border border-primary/40 flex items-center justify-center text-primary mx-auto shadow-[0_0_20px_rgba(0,180,255,0.25)]">
               <Users className="w-6 h-6 text-accent animate-pulse" />
             </div>
-            <DialogTitle className="font-sans text-2xl font-black text-foreground">
+            <h2 className="font-sans text-2xl font-black text-foreground">
               Invite Friends to Play
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-foreground/90 max-w-sm mx-auto">
+            </h2>
+            <p className="text-xs text-muted-foreground/90 max-w-sm mx-auto">
               Share your room to start instant 60 FPS multiplayer. Zero downloads or setup needed for guests!
-            </DialogDescription>
-          </DialogHeader>
+            </p>
+          </div>
 
           {/* 1. Prominent Room Code Display */}
           <div className="p-4 rounded-2xl bg-neutral-950/80 border border-white/10 text-center space-y-2 relative overflow-hidden group shadow-inner">
@@ -196,7 +227,8 @@ export function InviteModal({ open, onClose, sessionCode }: InviteModalProps) {
             Done
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>,
+    portalTarget
   );
 }

@@ -1,4 +1,4 @@
-﻿import React, { useCallback } from "react";
+import React, { useCallback } from "react";
 import { getPlayerActionKey } from "@/lib/gamepadMapping";
 import type { PlayerInputEvent } from "@/lib/webrtc";
 
@@ -6,9 +6,25 @@ interface TouchGamepadProps {
   playerSlot: number | null;
   onInput: (event: PlayerInputEvent) => void;
   onActivity?: (action: string, isDown: boolean) => void;
+  activeCore?: string;
 }
 
-export function TouchGamepad({ playerSlot, onInput, onActivity }: TouchGamepadProps) {
+export function TouchGamepad({ playerSlot, onInput, onActivity, activeCore }: TouchGamepadProps) {
+  const normCore = (activeCore || "segaMD").toLowerCase();
+  const is2Button =
+    normCore === "nes" ||
+    normCore === "gb" ||
+    normCore === "gbc" ||
+    normCore === "segams" ||
+    normCore === "segagg";
+  const is4ButtonDiamond =
+    normCore === "snes" ||
+    normCore === "gba" ||
+    normCore === "psx" ||
+    normCore === "nds" ||
+    normCore === "psp";
+  const isPsx = normCore === "psx";
+
   const triggerInput = useCallback(
     (action: string, isDown: boolean) => {
       onActivity?.(action, isDown);
@@ -99,13 +115,13 @@ export function TouchGamepad({ playerSlot, onInput, onActivity }: TouchGamepadPr
         </button>
       </div>
 
-      {/* Center: Mode & Start */}
+      {/* Center: Mode / Select & Start */}
       <div className="flex flex-col gap-3 items-center">
         <button
           {...makeTouchHandlers("mode")}
           className="px-3 py-1 bg-muted/80 active:bg-primary/60 border border-border rounded-full text-[10px] font-sans font-bold uppercase tracking-wider text-muted-foreground active:text-foreground"
         >
-          Mode
+          {is2Button || is4ButtonDiamond ? "Select" : "Mode"}
         </button>
         <button
           {...makeTouchHandlers("start")}
@@ -115,52 +131,103 @@ export function TouchGamepad({ playerSlot, onInput, onActivity }: TouchGamepadPr
         </button>
       </div>
 
-      {/* Right: 6-Button Arc (X Y Z top, A B C bottom) */}
-      <div className="flex flex-col gap-2">
-        {/* Top row: X, Y, Z */}
-        <div className="flex gap-2 justify-end">
-          <button
-            {...makeTouchHandlers("x")}
-            className="w-10 h-10 rounded-full bg-blue-950/80 active:bg-blue-600 border border-blue-500 font-display font-bold text-xs text-blue-300 active:text-white shadow"
-          >
-            X
-          </button>
-          <button
-            {...makeTouchHandlers("y")}
-            className="w-10 h-10 rounded-full bg-blue-950/80 active:bg-blue-600 border border-blue-500 font-display font-bold text-xs text-blue-300 active:text-white shadow"
-          >
-            Y
-          </button>
-          <button
-            {...makeTouchHandlers("z")}
-            className="w-10 h-10 rounded-full bg-blue-950/80 active:bg-blue-600 border border-blue-500 font-display font-bold text-xs text-blue-300 active:text-white shadow"
-          >
-            Z
-          </button>
-        </div>
-
-        {/* Bottom row: A, B, C */}
-        <div className="flex gap-2 justify-end">
-          <button
-            {...makeTouchHandlers("a")}
-            className="w-12 h-12 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-sm text-red-300 active:text-white shadow-lg"
-          >
-            A
-          </button>
+      {/* Right: Console-Adaptive Action Buttons (DES-07) */}
+      {is2Button ? (
+        /* 2 Large Buttons (B, A) for NES / GB / GBC / SegaMS */
+        <div className="flex items-center gap-3 pr-2">
           <button
             {...makeTouchHandlers("b")}
-            className="w-12 h-12 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-sm text-red-300 active:text-white shadow-lg"
+            className="w-14 h-14 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-base text-red-300 active:text-white shadow-lg translate-y-2 flex items-center justify-center transition-transform"
           >
             B
           </button>
           <button
-            {...makeTouchHandlers("c")}
-            className="w-12 h-12 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-sm text-red-300 active:text-white shadow-lg"
+            {...makeTouchHandlers("a")}
+            className="w-14 h-14 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-base text-red-300 active:text-white shadow-lg -translate-y-2 flex items-center justify-center transition-transform"
           >
-            C
+            A
           </button>
         </div>
-      </div>
+      ) : is4ButtonDiamond ? (
+        /* 4-Button Diamond Layout (X, Y, A, B) for SNES / GBA / PSX */
+        <div className="relative w-36 h-36 flex items-center justify-center">
+          {/* Top: X (or △ for PSX) */}
+          <button
+            {...makeTouchHandlers("x")}
+            className="absolute top-0 w-11 h-11 rounded-full bg-blue-950/80 active:bg-blue-600 border border-blue-500 font-display font-bold text-sm text-blue-300 active:text-white shadow flex items-center justify-center"
+          >
+            {isPsx ? "△" : "X"}
+          </button>
+          {/* Left: Y (or □ for PSX) */}
+          <button
+            {...makeTouchHandlers("y")}
+            className="absolute left-0 w-11 h-11 rounded-full bg-blue-950/80 active:bg-blue-600 border border-blue-500 font-display font-bold text-sm text-blue-300 active:text-white shadow flex items-center justify-center"
+          >
+            {isPsx ? "□" : "Y"}
+          </button>
+          {/* Right: A (or ○ for PSX) */}
+          <button
+            {...makeTouchHandlers("a")}
+            className="absolute right-0 w-12 h-12 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-sm text-red-300 active:text-white shadow-lg flex items-center justify-center"
+          >
+            {isPsx ? "○" : "A"}
+          </button>
+          {/* Bottom: B (or ✕ for PSX) */}
+          <button
+            {...makeTouchHandlers("b")}
+            className="absolute bottom-0 w-12 h-12 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-sm text-red-300 active:text-white shadow-lg flex items-center justify-center"
+          >
+            {isPsx ? "✕" : "B"}
+          </button>
+        </div>
+      ) : (
+        /* 6-Button Arc (3x2: X Y Z top, A B C bottom) for Sega Genesis / Arcade / Default */
+        <div className="flex flex-col gap-2">
+          {/* Top row: X, Y, Z */}
+          <div className="flex gap-2 justify-end">
+            <button
+              {...makeTouchHandlers("x")}
+              className="w-10 h-10 rounded-full bg-blue-950/80 active:bg-blue-600 border border-blue-500 font-display font-bold text-xs text-blue-300 active:text-white shadow"
+            >
+              X
+            </button>
+            <button
+              {...makeTouchHandlers("y")}
+              className="w-10 h-10 rounded-full bg-blue-950/80 active:bg-blue-600 border border-blue-500 font-display font-bold text-xs text-blue-300 active:text-white shadow"
+            >
+              Y
+            </button>
+            <button
+              {...makeTouchHandlers("z")}
+              className="w-10 h-10 rounded-full bg-blue-950/80 active:bg-blue-600 border border-blue-500 font-display font-bold text-xs text-blue-300 active:text-white shadow"
+            >
+              Z
+            </button>
+          </div>
+
+          {/* Bottom row: A, B, C */}
+          <div className="flex gap-2 justify-end">
+            <button
+              {...makeTouchHandlers("a")}
+              className="w-12 h-12 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-sm text-red-300 active:text-white shadow-lg"
+            >
+              A
+            </button>
+            <button
+              {...makeTouchHandlers("b")}
+              className="w-12 h-12 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-sm text-red-300 active:text-white shadow-lg"
+            >
+              B
+            </button>
+            <button
+              {...makeTouchHandlers("c")}
+              className="w-12 h-12 rounded-full bg-red-950/80 active:bg-red-600 border-2 border-red-500 font-display font-black text-sm text-red-300 active:text-white shadow-lg"
+            >
+              C
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
