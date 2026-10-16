@@ -3,7 +3,7 @@ import { useParams, useLocation } from "wouter";
 import { useGetSession, useJoinSession, getGetSessionQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Emulator } from "@/components/emulator";
-import { getRomUrl, getRomName, getRomCore, setRom, setRomFromUrl } from "@/lib/romStore";
+import { getRomUrl, getRomName, getRomCore, setRom, setRomFromUrl, clearRom } from "@/lib/romStore";
 import {
   getWsUrl,
   RTC_CONFIG,
@@ -50,6 +50,7 @@ import {
   Smartphone,
   Sparkles,
   FolderOpen,
+  Loader2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -129,6 +130,7 @@ export default function SessionPage() {
   const [newRomCore, setNewRomCore] = useState<string>("segaMD");
   const consoleSys = getConsoleSystem(activeCore);
   const [currentRomUrl, setCurrentRomUrl] = useState<string | null>(() => getRomUrl());
+  const [isReloadingRom, setIsReloadingRom] = useState(false);
   const [activeButtons, setActiveButtons] = useState<Set<string>>(new Set());
   const [keyboardMapping, setKeyboardMapping] = useState(() => loadKeyboardMapping());
 
@@ -166,7 +168,7 @@ export default function SessionPage() {
     },
   });
 
-  const romUrl = currentRomUrl || getRomUrl();
+  const romUrl = isReloadingRom ? "" : (currentRomUrl !== null ? currentRomUrl : getRomUrl());
   const isHost = Boolean(myPlayerId && session?.hostId && myPlayerId === session.hostId);
   const isHostRef = useRef(isHost);
   isHostRef.current = isHost;
@@ -1135,12 +1137,23 @@ export default function SessionPage() {
 
 
   const handleLoadRomFile = async (file: File) => {
+    setIsReloadingRom(true);
+    setRomPickerOpen(false);
+    // 1. Temporarily clear active stream and rom URL so previous Wasm/WebGL instance cleanly unmounts
+    gameStreamRef.current = null;
+    setCurrentRomUrl("");
+
+    // 2. Give the browser 300ms to garbage collect previous WebAssembly memory and release WebGL contexts
+    await new Promise((r) => setTimeout(r, 300));
+
+    // 3. Set the new ROM in romStore and mount the new core
     const url = await setRom(file, newRomCore);
     const title = cleanRomTitle(file.name);
-    gameStreamRef.current = null;
     setCurrentRomUrl(url);
     setActiveRomName(title);
     setActiveCore(newRomCore);
+    setIsReloadingRom(false);
+
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({
@@ -1155,8 +1168,33 @@ export default function SessionPage() {
       title: "ROM Loaded",
       description: `Loaded ${title} (${newRomCore})`,
     });
-    setRomPickerOpen(false);
     setNewRomFile(null);
+  };
+
+  const handleUnloadRom = async () => {
+    setIsReloadingRom(true);
+    setRomPickerOpen(false);
+    gameStreamRef.current = null;
+    setCurrentRomUrl("");
+    setActiveRomName(null);
+    clearRom();
+    await new Promise((r) => setTimeout(r, 200));
+    setIsReloadingRom(false);
+
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "rom-change",
+          sessionCode: code,
+          romName: "",
+          core: null,
+        }),
+      );
+    }
+    toast({
+      title: "Game Ejected",
+      description: "The previous game has been cleanly unloaded.",
+    });
   };
 
   const handleQuickJoinSubmit = (e: React.FormEvent) => {
@@ -1345,7 +1383,13 @@ export default function SessionPage() {
           {/* Game Stage */}
           <div className="w-full relative">
             {isHost ? (
-              romUrl ? (
+              isReloadingRom ? (
+                <div className="w-full aspect-[4/3] max-w-4xl mx-auto bg-black border-4 border-primary/50 rounded-lg flex flex-col items-center justify-center p-6 text-center space-y-3">
+                  <Loader2 className="w-8 h-8 text-primary animate-spin" />
+                  <p className="text-primary font-display text-lg tracking-wide">Switching Games...</p>
+                  <p className="text-muted-foreground text-xs font-sans">Cleaning up previous console memory and preparing new system...</p>
+                </div>
+              ) : romUrl ? (
                 <Emulator
                   key={`${romUrl}-${activeCore}`}
                   romUrl={romUrl}
@@ -1641,7 +1685,17 @@ export default function SessionPage() {
             )}
           </div>
 
-          <div className="flex justify-end pt-2 border-t border-border">
+          <div className="flex justify-between items-center pt-2 border-t border-border">
+            {activeRomName ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-destructive/50 text-destructive hover:bg-destructive hover:text-destructive-foreground font-bold text-xs"
+                onClick={handleUnloadRom}
+              >
+                Eject Current Game
+              </Button>
+            ) : <div />}
             <Button variant="ghost" size="sm" onClick={() => setRomPickerOpen(false)}>
               Close
             </Button>

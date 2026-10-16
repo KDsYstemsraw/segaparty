@@ -2,9 +2,19 @@ let romBlobUrl: string | null = null;
 let romFileName: string | null = null;
 let romCore: string | null = null;
 
+function safeRevokeUrl(url: string | null) {
+  if (url && url.startsWith("blob:")) {
+    setTimeout(() => {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+    }, 1500);
+  }
+}
+
 export function setRom(file: File, core?: string): Promise<string> {
   return new Promise((resolve) => {
-    if (romBlobUrl && romBlobUrl.startsWith("blob:")) URL.revokeObjectURL(romBlobUrl);
+    safeRevokeUrl(romBlobUrl);
     const url = URL.createObjectURL(file);
     romBlobUrl = url;
     romFileName = file.name;
@@ -14,7 +24,7 @@ export function setRom(file: File, core?: string): Promise<string> {
 }
 
 export function setRomFromUrl(url: string, name: string, core?: string): void {
-  if (romBlobUrl && romBlobUrl.startsWith("blob:")) URL.revokeObjectURL(romBlobUrl);
+  safeRevokeUrl(romBlobUrl);
   romBlobUrl = url;
   romFileName = name;
   romCore = core || null;
@@ -29,7 +39,7 @@ export function getRomCore(): string | null {
 }
 
 export function setRomFromBuffer(buffer: ArrayBuffer, name: string, core?: string): string {
-  if (romBlobUrl && romBlobUrl.startsWith("blob:")) URL.revokeObjectURL(romBlobUrl);
+  safeRevokeUrl(romBlobUrl);
   const blob = new Blob([buffer], { type: "application/octet-stream" });
   const url = URL.createObjectURL(blob);
   romBlobUrl = url;
@@ -47,10 +57,8 @@ export function getRomName(): string | null {
 }
 
 export function clearRom() {
-  if (romBlobUrl && romBlobUrl.startsWith("blob:")) {
-    URL.revokeObjectURL(romBlobUrl);
-    romBlobUrl = null;
-  }
+  safeRevokeUrl(romBlobUrl);
+  romBlobUrl = null;
   romFileName = null;
   romCore = null;
 }

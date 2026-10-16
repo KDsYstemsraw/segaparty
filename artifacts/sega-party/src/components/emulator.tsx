@@ -160,6 +160,72 @@ installAudioCaptureHook();
 
 
 
+function teardownEmulator() {
+  if (typeof window === "undefined") return;
+
+  const win = window as unknown as {
+    EJS_emulator?: {
+      callEvent?: (event: string) => void;
+      gameManager?: { functions?: { toggleMainLoop?: (val: number) => void } };
+      Module?: { abort?: () => void };
+      elements?: { parent?: HTMLElement };
+    };
+    Module?: { abort?: () => void };
+  };
+
+  // 1. Terminate Wasm main loop
+  try {
+    if (win.EJS_emulator?.gameManager?.functions?.toggleMainLoop) {
+      win.EJS_emulator.gameManager.functions.toggleMainLoop(0);
+    }
+    if (typeof win.EJS_emulator?.callEvent === "function") {
+      win.EJS_emulator.callEvent("exit");
+    }
+    if (typeof win.EJS_emulator?.Module?.abort === "function") {
+      win.EJS_emulator.Module.abort();
+    }
+  } catch {}
+
+  // 2. Forcibly release WebGL contexts on any canvas inside #game
+  try {
+    const canvases = document.querySelectorAll("#game canvas");
+    canvases.forEach((c) => {
+      const canvas = c as HTMLCanvasElement;
+      const gl = canvas.getContext("webgl") || canvas.getContext("webgl2") || canvas.getContext("experimental-webgl");
+      if (gl) {
+        const ext = (gl as WebGLRenderingContext).getExtension?.("WEBGL_lose_context");
+        ext?.loseContext?.();
+      }
+    });
+  } catch {}
+
+  // 3. Clear #game DOM node
+  const gameEl = document.getElementById("game");
+  if (gameEl) {
+    gameEl.innerHTML = "";
+  }
+
+  // 4. Remove injected loader and emulator scripts
+  document.querySelectorAll('script[src*="emulatorjs/"]').forEach((s) => s.remove());
+  document.querySelectorAll('head link[href*="emulatorjs/"]').forEach((s) => s.remove());
+
+  // 5. Clean up audio streams
+  if (window.__emulatorAudioStream) {
+    window.__emulatorAudioStream.getTracks().forEach((t) => t.stop());
+    window.__emulatorAudioStream = null;
+  }
+  delete (window as unknown as { __onEmulatorAudioChunk?: unknown }).__onEmulatorAudioChunk;
+
+  // 6. Delete global emulator instances
+  delete (window as unknown as { EJS_emulator?: unknown }).EJS_emulator;
+  delete (window as unknown as { EmulatorJS?: unknown }).EmulatorJS;
+  delete (window as unknown as { Module?: unknown }).Module;
+  delete (window as unknown as { AL?: unknown }).AL;
+  delete (window as unknown as { FS?: unknown }).FS;
+  delete (window as unknown as Record<string, unknown>).EJS_onGameStart;
+  delete (window as unknown as Record<string, unknown>).EJS_defaultControls;
+}
+
 export function Emulator({
   romUrl,
   core = "segaMD",
@@ -197,16 +263,8 @@ export function Emulator({
       onAudioChunkRef.current?.(pcmBase64, sampleRate);
     };
 
-    // Clean up any existing emulator instances or previous game DOM nodes
-    const gameEl = document.getElementById("game");
-    if (gameEl) {
-      gameEl.innerHTML = "";
-    }
-
-    try {
-      (window as unknown as { EJS_emulator?: { stop?: () => void } }).EJS_emulator?.stop?.();
-    } catch {}
-    delete (window as unknown as { EJS_emulator?: unknown }).EJS_emulator;
+    // Clean up any existing emulator instances, WebGL contexts, or DOM nodes
+    teardownEmulator();
 
     // Clear any cached ejs- localStorage keys and delete EmulatorJS IndexedDB databases on mount
     try {
@@ -581,29 +639,6 @@ export function Emulator({
       }
       frameCanvas = null;
       frameCtx = null;
-      delete (window as unknown as { __onEmulatorAudioChunk?: unknown }).__onEmulatorAudioChunk;
-
-      // Remove the loader script tag
-      if (document.body.contains(script)) {
-        document.body.removeChild(script);
-      }
-
-      // Remove injected emulator scripts from <head>
-      document.querySelectorAll('head script[src*="emulatorjs/src/"]').forEach((s) => s.remove());
-      document.querySelectorAll('head link[href*="emulatorjs/"]').forEach((s) => s.remove());
-
-      // Stop and destroy the emulator instance
-      try {
-        (window as unknown as { EJS_emulator?: { stop?: () => void } }).EJS_emulator?.stop?.();
-      } catch {}
-      delete (window as unknown as { EJS_emulator?: unknown }).EJS_emulator;
-
-      // Clean up audio stream
-      if (window.__emulatorAudioStream) {
-        window.__emulatorAudioStream.getTracks().forEach((t) => t.stop());
-        window.__emulatorAudioStream = null;
-      }
-
       // Clean up 2D capture pump
       if (animFrameId) {
         cancelAnimationFrame(animFrameId);
@@ -612,9 +647,13 @@ export function Emulator({
         captureCanvas.parentNode.removeChild(captureCanvas);
       }
 
-      // Clean up global EJS properties
-      delete (window as unknown as Record<string, unknown>).EJS_onGameStart;
-      delete (window as unknown as Record<string, unknown>).EJS_defaultControls;
+      // Remove the loader script tag
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
+
+      // Execute full Wasm/WebGL/DOM/script teardown
+      teardownEmulator();
     };
   }, [romUrl, core]);
 
