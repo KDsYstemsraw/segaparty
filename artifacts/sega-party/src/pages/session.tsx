@@ -3,7 +3,7 @@ import { useParams, useLocation } from "wouter";
 import { useGetSession, useJoinSession, getGetSessionQueryKey } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Emulator } from "@/components/emulator";
-import { getRomUrl, getRomName, setRom, setRomFromUrl } from "@/lib/romStore";
+import { getRomUrl, getRomName, getRomCore, setRom, setRomFromUrl } from "@/lib/romStore";
 import {
   getWsUrl,
   RTC_CONFIG,
@@ -24,10 +24,14 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { TouchGamepad } from "@/components/TouchGamepad";
 import { InviteModal } from "@/components/InviteModal";
 import { RomFilePicker } from "@/components/RomFilePicker";
+import { ConsolePicker } from "@/components/ConsolePicker";
+import { getConsoleSystem, detectConsoleFromFilename } from "@/lib/consoles";
 import { cleanRomTitle } from "@/lib/romUtils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import {
   Copy,
@@ -121,6 +125,9 @@ export default function SessionPage() {
   const [participants, setParticipants] = useState<ParticipantInfo[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeRomName, setActiveRomName] = useState<string | null>(getRomName());
+  const [activeCore, setActiveCore] = useState<string>(() => getRomCore() || "segaMD");
+  const [newRomCore, setNewRomCore] = useState<string>("segaMD");
+  const consoleSys = getConsoleSystem(activeCore);
   const [currentRomUrl, setCurrentRomUrl] = useState<string | null>(() => getRomUrl());
   const [activeButtons, setActiveButtons] = useState<Set<string>>(new Set());
   const [keyboardMapping, setKeyboardMapping] = useState(() => loadKeyboardMapping());
@@ -213,7 +220,7 @@ export default function SessionPage() {
     (event: PlayerInputEvent) => {
       if (isHost || isHostRef.current) {
         // Direct C-Core simulation (simulateEmulatorInput handles RetroArch joypad or falls back to KeyboardEvent)
-        simulateEmulatorInput(event.playerIndex, event.action, event.type === "keydown");
+        (simulateEmulatorInput as any)(event.playerIndex, event.action, event.type === "keydown", activeCore);
       } else {
         // Guest sends over WebRTC Data Channel to Host if open
         if (guestDataChannelRef.current?.readyState === "open") {
@@ -231,7 +238,7 @@ export default function SessionPage() {
         }
       }
     },
-    [code, isHost],
+    [code, isHost, activeCore],
   );
 
   useGamepad(effectiveSlot, handleInputEvent, handleButtonActivity);
@@ -335,7 +342,7 @@ export default function SessionPage() {
                 break;
               }
             }
-            simulateEmulatorInput(guestSlot, input.action, input.type === "keydown");
+            (simulateEmulatorInput as any)(guestSlot, input.action, input.type === "keydown", activeCore);
           } catch {}
         };
 
@@ -629,6 +636,7 @@ export default function SessionPage() {
           peerId: myPeerId.current,
           playerName: myPlayerName,
           romName: activeRomName || undefined,
+          core: activeCore || undefined,
         }),
       );
     };
@@ -646,6 +654,7 @@ export default function SessionPage() {
             participantsRef.current = peers;
           }
           if (msg.romName) setActiveRomName(msg.romName as string);
+          if (msg.core) setActiveCore(msg.core as string);
           if (msg.hostPeerId) hostPeerIdRef.current = msg.hostPeerId as string;
         }
 
@@ -694,8 +703,9 @@ export default function SessionPage() {
           setMessages((prev) => [...prev, msg as unknown as ChatMessage]);
         }
 
-        if (msg.type === "rom-info") {
-          setActiveRomName(msg.romName as string);
+        if (msg.type === "rom-change" || msg.type === "rom-info") {
+          if (msg.core) setActiveCore(msg.core as string);
+          if (msg.romName) setActiveRomName(msg.romName as string);
         }
 
         if (msg.type === "peer-joined" && isHost) {
@@ -719,10 +729,11 @@ export default function SessionPage() {
           msg.input
         ) {
           const input = msg.input as PlayerInputEvent;
-          simulateEmulatorInput(
+          (simulateEmulatorInput as any)(
             input.playerIndex || 2,
             input.action,
             input.type === "keydown",
+            activeCore,
           );
         }
 
@@ -780,7 +791,9 @@ export default function SessionPage() {
 
                     bufferSource.connect(guestGainNodeRef.current || ctx.destination);
 
-                    const startTime = Math.max(ctx.currentTime, nextAudioTimeRef.current);
+                    const now = ctx.currentTime;
+                    nextAudioTimeRef.current = Math.min(Math.max(now, nextAudioTimeRef.current), now + 0.1);
+                    const startTime = nextAudioTimeRef.current;
                     bufferSource.start(startTime);
                     nextAudioTimeRef.current = startTime + audioBuffer.duration;
                   }
@@ -1122,23 +1135,25 @@ export default function SessionPage() {
 
 
   const handleLoadRomFile = async (file: File) => {
-    const url = await setRom(file);
+    const url = await setRom(file, newRomCore);
     const title = cleanRomTitle(file.name);
     gameStreamRef.current = null;
     setCurrentRomUrl(url);
     setActiveRomName(title);
+    setActiveCore(newRomCore);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({
           type: "rom-change",
           sessionCode: code,
           romName: title,
+          core: newRomCore,
         }),
       );
     }
     toast({
       title: "ROM Loaded",
-      description: `Loaded ${title}`,
+      description: `Loaded ${title} (${newRomCore})`,
     });
     setRomPickerOpen(false);
     setNewRomFile(null);
@@ -1261,6 +1276,18 @@ export default function SessionPage() {
             </span>
           </div>
 
+          {activeRomName && (
+            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 bg-muted/30 border border-border/60 rounded-md max-w-xs truncate">
+              <Badge
+                variant="outline"
+                className={cn("text-[9px] font-bold py-0 px-1 uppercase shrink-0", consoleSys.badgeColor)}
+              >
+                {consoleSys.shortName}
+              </Badge>
+              <span className="text-xs font-bold text-foreground truncate">{activeRomName}</span>
+            </div>
+          )}
+
           <Button
             size="sm"
             variant="outline"
@@ -1282,7 +1309,7 @@ export default function SessionPage() {
               variant="outline"
               onClick={() => setRomPickerOpen(true)}
               className="h-7 px-2 text-xs font-sans border-primary/50 text-primary hover:bg-primary hover:text-primary-foreground gap-1.5 font-bold"
-              title="Load or Switch Sega Genesis ROM"
+              title="Load or Switch Game ROM"
             >
               <FolderOpen className="w-3.5 h-3.5 text-accent" /> Load ROM
             </Button>
@@ -1320,8 +1347,9 @@ export default function SessionPage() {
             {isHost ? (
               romUrl ? (
                 <Emulator
-                  key={romUrl}
+                  key={`${romUrl}-${activeCore}`}
                   romUrl={romUrl}
+                  core={activeCore}
                   onStreamReady={handleStreamReady}
                   onAudioTrackAdded={handleAudioTrackAdded}
                   onVideoFrame={handleVideoFrame}
@@ -1501,7 +1529,10 @@ export default function SessionPage() {
           <div className="flex items-center justify-between px-2 text-xs font-sans text-muted-foreground">
             <div className="flex items-center gap-2 truncate">
               <span className="font-bold text-foreground uppercase">Now Playing:</span>
-              <span className="text-primary font-mono truncate">{activeRomName || "Sega Genesis Game"}</span>
+              <Badge variant="outline" className={cn("text-[10px] font-bold py-0 px-1.5 uppercase", consoleSys.badgeColor)}>
+                {consoleSys.shortName}
+              </Badge>
+              <span className="text-primary font-mono truncate">{activeRomName || `${consoleSys.name} Game`}</span>
             </div>
 
             <div className="flex items-center gap-2 text-[11px] uppercase font-bold">
@@ -1561,7 +1592,11 @@ export default function SessionPage() {
       </main>
 
       {/* Controls & Gamepad Rebind Modal */}
-      <ControlsModal open={controlsOpen} onClose={() => setControlsOpen(false)} />
+      <ControlsModal
+        open={controlsOpen}
+        onClose={() => setControlsOpen(false)}
+        {...({ activeCore } as { activeCore?: string })}
+      />
 
       {/* Invite Friends & QR Code Modal */}
       <InviteModal open={inviteOpen} onClose={() => setInviteOpen(false)} sessionCode={session.code} />
@@ -1571,23 +1606,39 @@ export default function SessionPage() {
         <DialogContent className="max-w-lg bg-card border-primary/60 font-sans shadow-2xl">
           <DialogHeader>
             <DialogTitle className="font-display text-2xl text-primary flex items-center gap-2">
-              <FolderOpen className="w-6 h-6 text-accent" /> Load Sega Genesis ROM
+              <FolderOpen className="w-6 h-6 text-accent" /> Load Game ROM
             </DialogTitle>
             <DialogDescription className="font-sans text-xs text-muted-foreground">
-              Select any Sega Genesis ROM (.bin, .md, .gen, .smd, .zip) from your computer to run and stream live to all guests.
+              Select any supported ROM or disc image from your computer to run and stream live to all guests.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="my-3">
+          <div className="my-3 space-y-3">
             <RomFilePicker
               selectedFile={newRomFile}
               onFileSelected={(file) => {
                 setNewRomFile(file);
                 if (file) {
-                  handleLoadRomFile(file);
+                  const detected = detectConsoleFromFilename(file.name);
+                  setNewRomCore(detected.id);
                 }
               }}
             />
+
+            <ConsolePicker
+              selectedCore={newRomCore}
+              onSelectCore={setNewRomCore}
+              detectedCore={newRomFile ? detectConsoleFromFilename(newRomFile.name).id : undefined}
+            />
+
+            {newRomFile && (
+              <Button
+                className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold"
+                onClick={() => handleLoadRomFile(newRomFile)}
+              >
+                Launch & Stream Game
+              </Button>
+            )}
           </div>
 
           <div className="flex justify-end pt-2 border-t border-border">

@@ -13,6 +13,7 @@ export interface RoomState {
   code: string;
   hostPeerId: string | null;
   romName: string | null;
+  core: string | null;
   slots: Record<number, SlotHolder | null>; // 1: P1, 2: P2, 3: P3, 4: P4
   peers: Map<string, PeerInfo>;
 }
@@ -34,6 +35,7 @@ function getOrCreateRoom(sessionCode: string): RoomState {
       code: sessionCode,
       hostPeerId: null,
       romName: null,
+      core: null,
       slots: {
         1: null,
         2: null,
@@ -113,6 +115,7 @@ export function attachSignalingServer(server: Server) {
 
         const room = getOrCreateRoom(sessionCode);
         if (romName) room.romName = romName;
+        if (msg.core) room.core = msg.core as string;
 
         cleanupStaleSlots(room);
 
@@ -156,6 +159,7 @@ export function attachSignalingServer(server: Server) {
             type: "room-state",
             hostPeerId: room.hostPeerId,
             romName: room.romName,
+            core: room.core,
             slots: room.slots,
             peers: Array.from(room.peers.values()).map((p) => ({
               peerId: p.peerId,
@@ -521,28 +525,37 @@ export function attachSignalingServer(server: Server) {
 
       if (type === "rom-change" || type === "rom-info") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
-        const romName = msg.romName as string;
-        if (!sessionCode || !romName || myPeerId !== rooms.get(sessionCode)?.hostPeerId) return;
+        if (!sessionCode || myPeerId !== rooms.get(sessionCode)?.hostPeerId) return;
 
         const room = rooms.get(sessionCode);
         if (!room) return;
 
-        room.romName = romName;
+        room.romName = (msg.romName as string) || null;
+        room.core = (msg.core as string) || null;
+
+        broadcastToRoom(room, {
+          type: "rom-change",
+          romName: room.romName,
+          core: room.core,
+        });
 
         broadcastToRoom(room, {
           type: "rom-info",
-          romName,
+          romName: room.romName,
+          core: room.core,
         });
 
-        broadcastToRoom(room, {
-          type: "chat",
-          id: crypto.randomUUID(),
-          senderId: "system",
-          senderName: "SYSTEM",
-          text: `🕹️ Host loaded game: ${romName}`,
-          timestamp: Date.now(),
-          isSystem: true,
-        });
+        if (room.romName) {
+          broadcastToRoom(room, {
+            type: "chat",
+            id: crypto.randomUUID(),
+            senderId: "system",
+            senderName: "SYSTEM",
+            text: `🕹️ Host loaded game: ${room.romName}`,
+            timestamp: Date.now(),
+            isSystem: true,
+          });
+        }
         return;
       }
 

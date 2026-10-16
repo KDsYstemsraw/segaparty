@@ -4,9 +4,17 @@ import pinoHttp from "pino-http";
 import path from "path";
 import fs from "fs";
 import router from "./routes";
+import { romProxyRouter } from "./routes/romProxy";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
+
+app.use((req, res, next) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Embedder-Policy", "credentialless");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  next();
+});
 
 app.use(
   pinoHttp({
@@ -32,6 +40,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
+app.use("/api", romProxyRouter);
 
 // Serve static frontend in production / single-server mode
 const possibleStaticDirs = [

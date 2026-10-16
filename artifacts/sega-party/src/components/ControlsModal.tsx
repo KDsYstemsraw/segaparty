@@ -5,7 +5,6 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Gamepad2, RotateCcw, Circle, Keyboard } from "lucide-react";
 import {
-  GAME_ACTIONS,
   DEFAULT_MAPPING,
   loadMapping,
   saveMapping,
@@ -18,15 +17,103 @@ import {
   saveKeyboardMapping,
   formatKeyLabel,
 } from "@/lib/gamepadMapping";
+import { getConsoleSystem } from "@/lib/consoles";
+import { cn } from "@/lib/utils";
 
 interface ControlsModalProps {
   open: boolean;
   onClose: () => void;
+  activeCore?: string;
 }
 
-const ACTION_ORDER = ["up", "down", "left", "right", "a", "b", "c", "x", "y", "z", "start", "mode"];
+interface ActionInfo {
+  id: string;
+  label: string;
+}
 
-export function ControlsModal({ open, onClose }: ControlsModalProps) {
+function getConsoleActions(coreId: string): ActionInfo[] {
+  const normCore = (coreId || "segaMD").toLowerCase();
+
+  const dpad: ActionInfo[] = [
+    { id: "up", label: "D-Pad Up" },
+    { id: "down", label: "D-Pad Down" },
+    { id: "left", label: "D-Pad Left" },
+    { id: "right", label: "D-Pad Right" },
+  ];
+
+  if (normCore === "psx") {
+    return [
+      ...dpad,
+      { id: "b", label: "Cross (✕)" },
+      { id: "y", label: "Square (□)" },
+      { id: "a", label: "Circle (○)" },
+      { id: "x", label: "Triangle (△)" },
+      { id: "l1", label: "L1 Trigger" },
+      { id: "r1", label: "R1 Trigger" },
+      { id: "l2", label: "L2 Trigger" },
+      { id: "r2", label: "R2 Trigger" },
+      { id: "mode", label: "Select" },
+      { id: "start", label: "Start" },
+    ];
+  }
+
+  if (normCore === "snes") {
+    return [
+      ...dpad,
+      { id: "a", label: "A Button" },
+      { id: "b", label: "B Button" },
+      { id: "x", label: "X Button" },
+      { id: "y", label: "Y Button" },
+      { id: "l", label: "L Shoulder" },
+      { id: "r", label: "R Shoulder" },
+      { id: "mode", label: "Select" },
+      { id: "start", label: "Start" },
+    ];
+  }
+
+  if (normCore === "gba" || normCore === "gb" || normCore === "nes") {
+    return [
+      ...dpad,
+      { id: "a", label: "A Button" },
+      { id: "b", label: "B Button" },
+      { id: "l", label: "L Shoulder" },
+      { id: "r", label: "R Shoulder" },
+      { id: "mode", label: "Select" },
+      { id: "start", label: "Start" },
+    ];
+  }
+
+  if (normCore === "n64") {
+    return [
+      ...dpad,
+      { id: "a", label: "A Button" },
+      { id: "b", label: "B Button" },
+      { id: "z", label: "Z Trigger" },
+      { id: "l", label: "L Button" },
+      { id: "r", label: "R Button" },
+      { id: "c-up", label: "C-Up" },
+      { id: "c-down", label: "C-Down" },
+      { id: "c-left", label: "C-Left" },
+      { id: "c-right", label: "C-Right" },
+      { id: "start", label: "Start" },
+    ];
+  }
+
+  // Default: Sega Genesis / Mega Drive (6-button)
+  return [
+    ...dpad,
+    { id: "a", label: "A Button" },
+    { id: "b", label: "B Button" },
+    { id: "c", label: "C Button" },
+    { id: "x", label: "X Button" },
+    { id: "y", label: "Y Button" },
+    { id: "z", label: "Z Button" },
+    { id: "start", label: "Start" },
+    { id: "mode", label: "Mode" },
+  ];
+}
+
+export function ControlsModal({ open, onClose, activeCore = "segaMD" }: ControlsModalProps) {
   const [mapping, setMapping] = useState<GamepadMapping>(() => loadMapping());
   const [listeningFor, setListeningFor] = useState<string | null>(null);
   const [connectedPad, setConnectedPad] = useState<string | null>(null);
@@ -38,6 +125,9 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
   const [kbMapping, setKbMapping] = useState<KeyboardMapping>(() => loadKeyboardMapping());
   const [listeningKeyFor, setListeningKeyFor] = useState<string | null>(null);
   const [lastPressedKey, setLastPressedKey] = useState<string | null>(null);
+
+  const consoleSys = getConsoleSystem(activeCore);
+  const actions = getConsoleActions(activeCore);
 
   // Detect connected gamepad
   useEffect(() => {
@@ -165,9 +255,17 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
     >
       <DialogContent className="max-w-xl bg-card border-primary/50 font-sans shadow-2xl">
         <DialogHeader>
-          <DialogTitle className="font-display text-primary flex items-center gap-2 text-xl">
-            <Gamepad2 className="w-5 h-5 text-accent" /> Controller & Key Settings
-          </DialogTitle>
+          <div className="flex items-center justify-between pr-6">
+            <DialogTitle className="font-display text-primary flex items-center gap-2 text-xl">
+              <Gamepad2 className="w-5 h-5 text-accent" /> Controls & Key Settings
+            </DialogTitle>
+            <Badge
+              variant="outline"
+              className={cn("text-xs font-bold py-0.5 px-2 uppercase", consoleSys.badgeColor)}
+            >
+              {consoleSys.name}
+            </Badge>
+          </div>
         </DialogHeader>
 
         <Tabs defaultValue="gamepad" className="w-full">
@@ -202,12 +300,12 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
             </div>
 
             <p className="text-xs text-muted-foreground">
-              Click any button row below and press your physical controller button to rebind.
+              Click any button row below and press your physical controller button to rebind for {consoleSys.shortName}.
             </p>
 
             <div className="grid grid-cols-2 gap-1.5 max-h-60 overflow-y-auto pr-1">
-              {ACTION_ORDER.map((actionName) => {
-                const action = GAME_ACTIONS[actionName];
+              {actions.map((act) => {
+                const actionName = act.id;
                 const isListening = listeningFor === actionName;
                 const boundButton = actionToButton(actionName);
                 return (
@@ -221,7 +319,7 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
                     }`}
                   >
                     <span className="text-xs font-bold text-foreground uppercase tracking-wide">
-                      {action.label}
+                      {act.label}
                     </span>
                     <span className={`text-xs font-mono font-bold ${isListening ? "text-accent" : "text-muted-foreground"}`}>
                       {isListening ? "Press now…" : boundButton}
@@ -293,12 +391,12 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
             </div>
 
             <p className="text-xs text-muted-foreground">
-              Click any button to rebind. Press Escape to cancel.
+              Click any button to rebind for {consoleSys.shortName}. Press Escape to cancel.
             </p>
 
             <div className="grid grid-cols-2 gap-1.5 max-h-60 overflow-y-auto pr-1">
-              {ACTION_ORDER.map((actionName) => {
-                const action = GAME_ACTIONS[actionName];
+              {actions.map((act) => {
+                const actionName = act.id;
                 const isListening = listeningKeyFor === actionName;
                 const boundKey = kbMapping[actionName] || "";
                 const keyDisplay = isListening ? "Press any key..." : formatKeyLabel(boundKey);
@@ -313,7 +411,7 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
                     }`}
                   >
                     <span className="text-xs font-bold text-foreground uppercase tracking-wide">
-                      {action?.label || actionName}
+                      {act.label}
                     </span>
                     <span
                       className={`text-xs font-mono font-bold ${
@@ -357,4 +455,3 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
     </Dialog>
   );
 }
-

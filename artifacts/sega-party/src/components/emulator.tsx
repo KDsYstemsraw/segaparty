@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 
 export interface EmulatorProps {
   romUrl: string;
+  core?: string;
   onStreamReady?: (stream: MediaStream) => void;
   onAudioTrackAdded?: (track: MediaStreamTrack) => void;
   onVideoFrame?: (dataUrl: string) => void;
@@ -22,6 +23,7 @@ declare global {
     EJS_disableDatabases?: boolean;
     EJS_disableLocalStorage?: boolean;
     EJS_defaultOptions?: Record<string, string>;
+    EJS_threads?: boolean;
     __emulatorAudioStream?: MediaStream | null;
     __onEmulatorAudioChunk?: (pcmBase64: string, sampleRate: number) => void;
   }
@@ -160,6 +162,7 @@ installAudioCaptureHook();
 
 export function Emulator({
   romUrl,
+  core = "segaMD",
   onStreamReady,
   onAudioTrackAdded,
   onVideoFrame,
@@ -223,16 +226,27 @@ export function Emulator({
     streamReadyFired.current = false;
 
     window.EJS_player = "#game";
-    window.EJS_core = "segaMD";
+    window.EJS_core = core || "segaMD";
     window.EJS_gameUrl = romUrl;
     window.EJS_pathtodata = "/emulatorjs/";
     window.EJS_startOnLoaded = true;
     window.EJS_disableDatabases = true;
     window.EJS_disableLocalStorage = true;
-    window.EJS_defaultOptions = {
-      "genesis_plus_gx_joypad_1": "6 button",
-      "genesis_plus_gx_joypad_2": "6 button",
-    };
+    window.EJS_threads = typeof window !== "undefined" && Boolean(window.crossOriginIsolated);
+
+    if (["segaMD", "segaCD", "sega32x"].includes(window.EJS_core)) {
+      window.EJS_defaultOptions = {
+        "genesis_plus_gx_joypad_1": "6 button",
+        "genesis_plus_gx_joypad_2": "6 button",
+      };
+    } else if (window.EJS_core === "psx") {
+      window.EJS_defaultOptions = {
+        "pcsx_rearmed_pad1type": "standard",
+        "pcsx_rearmed_pad2type": "standard",
+      };
+    } else {
+      window.EJS_defaultOptions = {};
+    }
 
     // Configure conflict-free default mappings aligned with RetroPad indices (0: B, 1: A, 8: C, 9: Y, 10: X, 11: Z)
     window.EJS_defaultControls = {
@@ -530,10 +544,20 @@ export function Emulator({
 
     window.EJS_disableDatabases = true;
     window.EJS_disableLocalStorage = true;
-    window.EJS_defaultOptions = {
-      "genesis_plus_gx_joypad_1": "6 button",
-      "genesis_plus_gx_joypad_2": "6 button",
-    };
+    window.EJS_threads = typeof window !== "undefined" && Boolean(window.crossOriginIsolated);
+    if (["segaMD", "segaCD", "sega32x"].includes(window.EJS_core)) {
+      window.EJS_defaultOptions = {
+        "genesis_plus_gx_joypad_1": "6 button",
+        "genesis_plus_gx_joypad_2": "6 button",
+      };
+    } else if (window.EJS_core === "psx") {
+      window.EJS_defaultOptions = {
+        "pcsx_rearmed_pad1type": "standard",
+        "pcsx_rearmed_pad2type": "standard",
+      };
+    } else {
+      window.EJS_defaultOptions = {};
+    }
 
     const script = document.createElement("script");
     script.src = "/emulatorjs/loader.js";
@@ -592,7 +616,7 @@ export function Emulator({
       delete (window as unknown as Record<string, unknown>).EJS_onGameStart;
       delete (window as unknown as Record<string, unknown>).EJS_defaultControls;
     };
-  }, [romUrl]);
+  }, [romUrl, core]);
 
 
   const toggleFullscreen = () => {

@@ -3,14 +3,14 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { useCreateSession, useJoinSession } from "@workspace/api-client-react";
-import { Loader2, Upload, Gamepad2, Zap, Sparkles, Dices, Users, ShieldCheck, Flame, FolderOpen } from "lucide-react";
+import { Loader2, Gamepad2, Zap, Dices, Flame, Link2, FolderOpen } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { setRom, setRomFromUrl } from "@/lib/romStore";
-import { SAMPLE_ROMS, type SampleRom } from "@/lib/sampleRoms";
 import { RomFilePicker } from "@/components/RomFilePicker";
+import { ConsolePicker } from "@/components/ConsolePicker";
+import { detectConsoleFromFilename } from "@/lib/consoles";
 import { cleanRomTitle } from "@/lib/romUtils";
 import { setStoredPlayerIdentity } from "@/lib/webrtc";
 
@@ -35,9 +35,11 @@ export default function Home() {
 
   // Create Session State
   const [hostName, setHostName] = useState(getRandomName);
+  const [romMethod, setRomMethod] = useState<"file" | "url">("file");
   const [romFile, setRomFile] = useState<File | null>(null);
-  const [selectedSampleRom, setSelectedSampleRom] = useState<SampleRom | null>(SAMPLE_ROMS[0]);
-  const [romSourceTab, setRomSourceTab] = useState<"file" | "sample">("file");
+  const [romUrlInput, setRomUrlInput] = useState("");
+  const [selectedCore, setSelectedCore] = useState<string>("segaMD");
+  const [detectedCore, setDetectedCore] = useState<string | undefined>();
 
   // Join Session State
   const [joinName, setJoinName] = useState(getRandomName);
@@ -46,24 +48,47 @@ export default function Home() {
   const createSession = useCreateSession();
   const joinSession = useJoinSession();
 
+  const handleFileSelected = (file: File | null) => {
+    setRomFile(file);
+    if (file) {
+      const sys = detectConsoleFromFilename(file.name);
+      setSelectedCore(sys.id);
+      setDetectedCore(sys.id);
+    }
+  };
+
+  const handleUrlChange = (url: string) => {
+    setRomUrlInput(url);
+    if (url.trim()) {
+      const clean = url.split("?")[0];
+      const filename = clean.split("/").pop() || "";
+      if (filename) {
+        const sys = detectConsoleFromFilename(filename);
+        setSelectedCore(sys.id);
+        setDetectedCore(sys.id);
+      }
+    }
+  };
+
   const handleCreate = async () => {
     if (!hostName.trim()) {
       toast({ title: "Error", description: "Please enter your host name.", variant: "destructive" });
       return;
     }
 
-    if (romSourceTab === "file") {
+    if (romMethod === "file") {
       if (!romFile) {
-        toast({ title: "Error", description: "Please select a Sega Genesis ROM file from your computer.", variant: "destructive" });
+        toast({ title: "Error", description: "Please select a ROM file from your computer.", variant: "destructive" });
         return;
       }
-      await setRom(romFile);
+      await setRom(romFile, selectedCore);
     } else {
-      if (!selectedSampleRom) {
-        toast({ title: "Error", description: "Please pick a sample demo ROM.", variant: "destructive" });
+      if (!romUrlInput.trim()) {
+        toast({ title: "Error", description: "Please enter a valid direct ROM URL.", variant: "destructive" });
         return;
       }
-      setRomFromUrl(selectedSampleRom.url, selectedSampleRom.name);
+      const cleanTitle = cleanRomTitle(romUrlInput.split("?")[0].split("/").pop() || "Retro Game");
+      setRomFromUrl(romUrlInput.trim(), cleanTitle, selectedCore);
     }
 
     createSession.mutate(
@@ -103,10 +128,10 @@ export default function Home() {
   };
 
   const getActiveGameTitle = () => {
-    if (romSourceTab === "file") {
+    if (romMethod === "file") {
       return romFile ? cleanRomTitle(romFile.name) : "Choose ROM File";
     }
-    return selectedSampleRom?.name || "Demo";
+    return romUrlInput.trim() ? cleanRomTitle(romUrlInput.split("?")[0].split("/").pop() || "ROM") : "Enter ROM URL";
   };
 
   return (
@@ -125,11 +150,9 @@ export default function Home() {
         </h1>
 
         <p className="text-muted-foreground text-sm font-sans tracking-wide">
-          Multiplayer Sega Genesis party rooms
+          Multiplayer party rooms for Sega Genesis, PS1, SNES, N64, GBA & more
         </p>
       </div>
-
-
 
       {/* Main Grid */}
       <div className="w-full max-w-5xl grid md:grid-cols-12 gap-8 relative z-10">
@@ -145,7 +168,7 @@ export default function Home() {
               </Badge>
             </div>
             <CardDescription className="font-sans text-xs">
-              Pick any Sega Genesis ROM from your computer, create a room, and share the link with friends!
+              Load your ROM (.chd, .bin, .sfc, .nes, .z64, .gba, .zip), create a room, and invite friends to play in sync!
             </CardDescription>
           </CardHeader>
 
@@ -173,74 +196,72 @@ export default function Home() {
               />
             </div>
 
-            {/* ROM Selection: Pick Local File vs Built-in */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
-                Select Game to Play
-              </label>
+            {/* ROM Selection Source */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  Select Game to Play
+                </label>
+                <div className="flex items-center gap-1 bg-muted/60 p-0.5 rounded-lg border border-border">
+                  <button
+                    type="button"
+                    onClick={() => setRomMethod("file")}
+                    className={`text-[11px] font-sans font-bold px-2 py-1 rounded transition-colors flex items-center gap-1 ${
+                      romMethod === "file"
+                        ? "bg-primary text-primary-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <FolderOpen className="w-3 h-3" /> Local File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRomMethod("url")}
+                    className={`text-[11px] font-sans font-bold px-2 py-1 rounded transition-colors flex items-center gap-1 ${
+                      romMethod === "url"
+                        ? "bg-primary text-primary-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Link2 className="w-3 h-3" /> Direct URL
+                  </button>
+                </div>
+              </div>
 
-              <Tabs
-                value={romSourceTab}
-                onValueChange={(v) => setRomSourceTab(v as "file" | "sample")}
-                className="w-full"
-              >
-                <TabsList className="grid grid-cols-2 bg-muted/60 mb-3">
-                  <TabsTrigger value="file" className="text-xs font-bold gap-1.5">
-                    <FolderOpen className="w-3.5 h-3.5 text-accent" /> Pick Local ROM File
-                  </TabsTrigger>
-                  <TabsTrigger value="sample" className="text-xs font-bold gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" /> Built-in Demos
-                  </TabsTrigger>
-                </TabsList>
-
-                {/* Pick Local ROM File Tab (100% Client-side in browser memory) */}
-                <TabsContent value="file" className="space-y-2">
-                  <RomFilePicker
-                    selectedFile={romFile}
-                    onFileSelected={(file) => setRomFile(file)}
+              {romMethod === "file" ? (
+                <RomFilePicker
+                  selectedFile={romFile}
+                  onFileSelected={handleFileSelected}
+                />
+              ) : (
+                <div className="space-y-1.5 p-4 rounded-xl border border-primary/30 bg-primary/5">
+                  <label className="text-xs font-bold text-muted-foreground font-sans uppercase tracking-wider flex items-center gap-1.5">
+                    <Link2 className="w-3.5 h-3.5 text-accent" /> Direct ROM URL (.chd, .bin, .sfc, etc.)
+                  </label>
+                  <Input
+                    placeholder="https://example.com/games/mygame.chd"
+                    value={romUrlInput}
+                    onChange={(e) => handleUrlChange(e.target.value)}
+                    className="bg-background/80 border-primary/30 focus-visible:ring-primary font-mono text-xs h-10"
                   />
-                </TabsContent>
+                  <p className="text-[10px] text-muted-foreground font-sans">
+                    Must be a CORS-accessible direct download link.
+                  </p>
+                </div>
+              )}
 
-                {/* Built-in Games Grid */}
-                <TabsContent value="sample" className="space-y-2">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1">
-                    {SAMPLE_ROMS.map((rom) => {
-                      const isSelected = selectedSampleRom?.id === rom.id;
-                      return (
-                        <button
-                          key={rom.id}
-                          type="button"
-                          onClick={() => setSelectedSampleRom(rom)}
-                          className={`p-2.5 rounded-lg border text-left transition-all ${
-                            isSelected
-                              ? "border-primary bg-primary/15 shadow-[0_0_12px_rgba(0,71,187,0.3)] ring-1 ring-primary"
-                              : "border-border bg-background/50 hover:border-primary/40 hover:bg-primary/5"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-bold text-xs text-foreground truncate">{rom.name}</span>
-                          </div>
-                          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground mb-1">
-                            <Badge variant="outline" className="text-[9px] py-0 px-1 border-primary/40 text-primary">
-                              {rom.badge}
-                            </Badge>
-                            <span>{rom.category}</span>
-                          </div>
-                          <p className="text-[10px] text-muted-foreground line-clamp-2 leading-tight">
-                            {rom.description}
-                          </p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </TabsContent>
-              </Tabs>
+              {/* Console / Emulation Core Picker */}
+              <ConsolePicker
+                selectedCore={selectedCore}
+                onSelectCore={setSelectedCore}
+                detectedCore={detectedCore}
+              />
             </div>
 
             {/* Launch Button */}
             <Button
               onClick={handleCreate}
-              disabled={createSession.isPending || !hostName.trim() || (romSourceTab === "file" && !romFile)}
+              disabled={createSession.isPending || !hostName.trim() || (romMethod === "file" && !romFile) || (romMethod === "url" && !romUrlInput.trim())}
               className="w-full h-13 text-base font-bold uppercase tracking-wider bg-primary hover:bg-primary/85 text-primary-foreground shadow-[0_0_20px_rgba(0,71,187,0.5)] transition-all hover:scale-[1.01]"
             >
               {createSession.isPending ? (
@@ -326,7 +347,3 @@ export default function Home() {
     </div>
   );
 }
-
-
-
-

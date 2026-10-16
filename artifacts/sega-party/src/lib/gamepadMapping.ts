@@ -1,3 +1,5 @@
+import { getRomCore } from "@/lib/romStore";
+
 export interface GameAction {
   key: string;
   keyCode: number;
@@ -156,6 +158,13 @@ export const DEFAULT_KEYBOARD_MAPPING: KeyboardMapping = {
   x: "a",
   y: "s",
   z: "d",
+  l: "q",
+  r: "e",
+  l1: "q",
+  r1: "e",
+  l2: "1",
+  r2: "3",
+  select: "Shift",
   start: "Enter",
   mode: " ",
 };
@@ -171,6 +180,13 @@ export const WASD_KEYBOARD_MAPPING: KeyboardMapping = {
   x: "u",
   y: "i",
   z: "o",
+  l: "q",
+  r: "e",
+  l1: "q",
+  r1: "e",
+  l2: "1",
+  r2: "3",
+  select: "Shift",
   start: "Enter",
   mode: "Shift",
 };
@@ -232,28 +248,146 @@ export const RETROPAD_BUTTON_IDS: Record<string, number> = {
   z: 11,
 };
 
-// Maps Sega Genesis action name to EmulatorJS / RetroPad button index (0..11)
-export const EJS_ACTION_TO_BUTTON_ID: Record<string, number> = {
-  b: 0,
-  a: 1,
-  mode: 2,
-  start: 3,
+// D-Pad and Analog Left Stick button IDs for RetroPad
+export const D_PAD_IDS: Record<string, number> = {
   up: 4,
   down: 5,
   left: 6,
   right: 7,
-  c: 8,
-  y: 9,
-  x: 10,
-  z: 11,
 };
+
+export const ANALOG_STICK_IDS: Record<string, number> = {
+  up: 19,
+  down: 18,
+  left: 17,
+  right: 16,
+};
+
+// Maps action name to RetroPad button index according to the active console core
+export function getCoreActionToButtonId(core: string): Record<string, number> {
+  const normCore = (core || "segaMD").toLowerCase();
+
+  if (normCore === "psx") {
+    return {
+      cross: 0,
+      b: 0,
+      square: 1,
+      y: 1,
+      select: 2,
+      mode: 2,
+      start: 3,
+      up: 4,
+      down: 5,
+      left: 6,
+      right: 7,
+      circle: 8,
+      a: 8,
+      triangle: 9,
+      x: 9,
+      l1: 10,
+      l: 10,
+      r1: 11,
+      r: 11,
+      l2: 12,
+      r2: 13,
+    };
+  }
+
+  if (normCore === "snes") {
+    return {
+      b: 0,
+      y: 1,
+      select: 2,
+      mode: 2,
+      start: 3,
+      up: 4,
+      down: 5,
+      left: 6,
+      right: 7,
+      a: 8,
+      x: 9,
+      l: 10,
+      l1: 10,
+      r: 11,
+      r1: 11,
+    };
+  }
+
+  if (normCore === "gba" || normCore === "gb" || normCore === "nes") {
+    return {
+      b: 0,
+      select: 2,
+      mode: 2,
+      start: 3,
+      up: 4,
+      down: 5,
+      left: 6,
+      right: 7,
+      a: 8,
+      l: 10,
+      r: 11,
+    };
+  }
+
+  if (normCore === "n64") {
+    return {
+      b: 0,
+      y: 1,
+      select: 2,
+      mode: 2,
+      start: 3,
+      up: 4,
+      down: 5,
+      left: 6,
+      right: 7,
+      a: 8,
+      x: 9,
+      l: 10,
+      r: 11,
+      z: 12,
+      l2: 12,
+      r2: 13,
+      "c-up": 19,
+      "c-down": 18,
+      "c-left": 17,
+      "c-right": 16,
+    };
+  }
+
+  // Default: Sega Genesis / Mega Drive / Sega CD / Sega 32X
+  return {
+    b: 0,
+    a: 1,
+    mode: 2,
+    select: 2,
+    start: 3,
+    up: 4,
+    down: 5,
+    left: 6,
+    right: 7,
+    c: 8,
+    y: 9,
+    x: 10,
+    z: 11,
+  };
+}
+
+// Backward compatible alias
+export const EJS_ACTION_TO_BUTTON_ID: Record<string, number> = getCoreActionToButtonId("segaMD");
 
 /**
  * Simulates controller input into EmulatorJS directly via the C-core GameManager,
  * falling back to synthetic KeyboardEvents if the C-core is not ready.
+ * Dual-routes directionals to both D-Pad and Left Analog Stick for PSX/N64.
  * Returns true when direct C-core input succeeded, or false when it fell back to KeyboardEvent.
  */
-export function simulateEmulatorInput(playerIndex: number, action: string, isDown: boolean): boolean {
+export function simulateEmulatorInput(
+  playerIndex: number,
+  action: string,
+  isDown: boolean,
+  core?: string,
+): boolean {
+  const activeCore = core || getRomCore() || "segaMD";
   const normAction = (action?.toLowerCase?.() || "").trim();
   const port = Math.max(0, Math.min(3, (Number(playerIndex) || 1) - 1));
 
@@ -271,11 +405,13 @@ export function simulateEmulatorInput(playerIndex: number, action: string, isDow
       action: string;
       btnId: number | undefined;
       isDown: boolean;
+      activeCore: string;
       timestamp: number;
     };
   };
 
-  const btnId = EJS_ACTION_TO_BUTTON_ID[normAction];
+  const actionMap = getCoreActionToButtonId(activeCore);
+  const btnId = actionMap[normAction];
 
   // Store debug diagnostic on window for E2E tests and debugging
   try {
@@ -285,22 +421,46 @@ export function simulateEmulatorInput(playerIndex: number, action: string, isDow
       action: normAction,
       btnId,
       isDown,
+      activeCore,
       timestamp: Date.now(),
     };
   } catch {}
 
   const gm = win.EJS_emulator?.gameManager;
-  if (btnId !== undefined && gm) {
-    try {
-      if (typeof gm.functions?.simulateInput === "function") {
-        gm.functions.simulateInput(port, btnId, isDown ? 1 : 0);
-        return true;
+  if (gm) {
+    const sendToGm = (buttonIndex: number) => {
+      try {
+        if (typeof gm.functions?.simulateInput === "function") {
+          gm.functions.simulateInput(port, buttonIndex, isDown ? 1 : 0);
+          return true;
+        }
+        if (typeof gm.simulateInput === "function") {
+          gm.simulateInput(port, buttonIndex, isDown ? 1 : 0);
+          return true;
+        }
+      } catch {}
+      return false;
+    };
+
+    let sent = false;
+    if (btnId !== undefined) {
+      if (sendToGm(btnId)) {
+        sent = true;
       }
-      if (typeof gm.simulateInput === "function") {
-        gm.simulateInput(port, btnId, isDown ? 1 : 0);
-        return true;
+    }
+
+    // Dual-Route Directionals: When activeCore is n64 or psx, also send to Left Analog Stick!
+    const isDirectional = normAction in D_PAD_IDS;
+    if ((activeCore === "n64" || activeCore === "psx") && isDirectional) {
+      const stickId = ANALOG_STICK_IDS[normAction];
+      if (stickId !== undefined && stickId !== btnId) {
+        if (sendToGm(stickId)) {
+          sent = true;
+        }
       }
-    } catch {}
+    }
+
+    if (sent) return true;
   }
 
   // Fallback: dispatch KeyboardEvent using player's assigned key mapping
