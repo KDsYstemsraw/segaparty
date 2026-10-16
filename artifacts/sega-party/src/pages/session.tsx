@@ -116,6 +116,7 @@ export default function SessionPage() {
 
   // Modals state
   const [controlsOpen, setControlsOpen] = useState(false);
+  const [controlsSlot, setControlsSlot] = useState<number | undefined>(undefined);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [joinPromptOpen, setJoinPromptOpen] = useState(false);
   const [romPickerOpen, setRomPickerOpen] = useState(false);
@@ -1337,7 +1338,10 @@ export default function SessionPage() {
           <Button
             size="sm"
             variant="default"
-            onClick={() => setControlsOpen(true)}
+            onClick={() => {
+              setControlsSlot(effectiveSlot);
+              setControlsOpen(true);
+            }}
             className="h-7 px-2.5 text-xs font-sans bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-sm shadow-primary/40 gap-1.5"
           >
             <Wand2 className="w-3.5 h-3.5 text-accent animate-pulse" /> Controls Wizard
@@ -1532,6 +1536,23 @@ export default function SessionPage() {
 
                       <div className="w-px h-4 bg-white/10" />
 
+                      {/* Remap Controls Shortcut */}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setControlsSlot(effectiveSlot);
+                          setControlsOpen(true);
+                        }}
+                        className="h-7 px-2 text-xs text-primary-foreground hover:bg-white/10 font-bold gap-1 rounded-lg"
+                        title={`Remap Controls for Player ${effectiveSlot}`}
+                      >
+                        <Gamepad2 className="w-3.5 h-3.5 text-accent" />
+                        <span className="hidden sm:inline">P{effectiveSlot} Controls</span>
+                      </Button>
+
+                      <div className="w-px h-4 bg-white/10" />
+
                       {/* CRT Scanline Toggle */}
                       <Button
                         size="icon"
@@ -1619,8 +1640,23 @@ export default function SessionPage() {
               </span>
             </div>
 
-            {/* Glowing Pill Badges: ICE Connection Orb & Real-time Stream Mode */}
+            {/* Glowing Pill Badges: ICE Connection Orb & Quick Remap Button */}
             <div className="flex items-center gap-2 shrink-0">
+              {/* Quick Remap Controls Button */}
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => {
+                  setControlsSlot(effectiveSlot);
+                  setControlsOpen(true);
+                }}
+                className="h-7 px-2.5 text-xs font-sans bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-primary-foreground font-bold shadow-[0_0_12px_rgba(0,180,255,0.4)] gap-1.5 animate-pulse hover:animate-none hover:scale-105 transition-all"
+                title={`Configure & Test Controls for Player ${effectiveSlot}`}
+              >
+                <Gamepad2 className="w-3.5 h-3.5 text-yellow-300" />
+                <span>Remap Controls (P{effectiveSlot})</span>
+              </Button>
+
               {/* ICE Connection Status Orb */}
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-neutral-900/90 border border-neutral-700/60 shadow-sm text-[11px] font-mono">
                 {isHost ? (
@@ -1706,7 +1742,10 @@ export default function SessionPage() {
             onPassSlot={handlePassSlot}
             onKickSlot={handleKickSlot}
             onRequestSlot={handleRequestSlot}
-            onOpenControls={() => setControlsOpen(true)}
+            onOpenControls={(slot) => {
+              if (slot) setControlsSlot(slot);
+              setControlsOpen(true);
+            }}
           />
 
           {/* Mobile Touch Controller (if toggled) */}
@@ -1736,9 +1775,12 @@ export default function SessionPage() {
       {/* Controls & Gamepad Rebind Modal */}
       <ControlsModal
         open={controlsOpen}
-        onClose={() => setControlsOpen(false)}
+        onClose={() => {
+          setControlsOpen(false);
+          setControlsSlot(undefined);
+        }}
         activeCore={activeCore}
-        playerSlot={effectiveSlot}
+        playerSlot={controlsSlot || effectiveSlot}
         isHost={isHost}
       />
 

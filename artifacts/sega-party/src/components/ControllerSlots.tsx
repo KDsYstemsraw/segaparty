@@ -42,7 +42,7 @@ interface ControllerSlotsProps {
   onPassSlot?: (slot: number, targetPeerId: string, targetPlayerName: string) => void;
   onKickSlot?: (slot: number) => void;
   onRequestSlot?: (slot: number) => void;
-  onOpenControls?: () => void;
+  onOpenControls?: (slot?: number) => void;
 }
 
 const SLOT_CONFIGS: Record<
@@ -156,7 +156,7 @@ export function ControllerSlots({
             <Button
               size="sm"
               variant="outline"
-              onClick={onOpenControls}
+              onClick={() => onOpenControls(mySlot || undefined)}
               className="h-7 text-xs border-primary/50 text-primary hover:bg-primary hover:text-primary-foreground font-bold gap-1"
             >
               <Settings2 className="w-3.5 h-3.5" /> Controls Setup Wizard
@@ -295,11 +295,25 @@ export function ControllerSlots({
                 <div className="space-y-1.5">
                   {isOccupied ? (
                     <div className="space-y-0.5">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Gamepad2 className={cn("w-3.5 h-3.5 shrink-0", cfg.color)} />
-                        <span className="font-sans font-bold text-xs truncate text-foreground">
-                          {holder.playerName}
-                        </span>
+                      <div className="flex items-center justify-between gap-1 min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Gamepad2 className={cn("w-3.5 h-3.5 shrink-0", cfg.color)} />
+                          <span className="font-sans font-bold text-xs truncate text-foreground">
+                            {holder.playerName}
+                          </span>
+                        </div>
+                        {onOpenControls && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => onOpenControls(slotNum)}
+                            className="h-5 text-[9px] px-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 border border-border/50 gap-0.5 rounded shrink-0 font-sans"
+                            title={`Rebind Controls for Player ${slotNum}`}
+                          >
+                            <Settings2 className="w-2.5 h-2.5 text-accent" /> Rebind
+                          </Button>
+                        )}
                       </div>
                       <p className="text-[9px] text-muted-foreground font-sans uppercase tracking-wider flex items-center gap-1">
                         <Radio className="w-2 h-2 text-accent" />

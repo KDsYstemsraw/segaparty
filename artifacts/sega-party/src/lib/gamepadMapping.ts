@@ -231,6 +231,8 @@ export function savePlayerKeyboardMapping(playerSlot: number, mapping: KeyboardM
     }
   } catch {}
 
+  syncEmulatorJSControls(slot, mapping);
+
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("controls-mapping-changed", { detail: { playerSlot: slot } }));
     window.dispatchEvent(new Event("keyboard-mapping-changed"));
@@ -549,6 +551,128 @@ export function getCoreActionToButtonId(core: string): Record<string, number> {
 export const EJS_ACTION_TO_BUTTON_ID: Record<string, number> = getCoreActionToButtonId("segaMD");
 
 /**
+ * Converts keyboard key name into a standard numeric JavaScript keyCode for EmulatorJS.
+ */
+export function keyNameToKeyCode(key: string): number {
+  if (!key) return 0;
+  const trimmed = key.trim();
+  const lower = trimmed.toLowerCase();
+
+  const SPECIAL: Record<string, number> = {
+    arrowup: 38,
+    arrowdown: 40,
+    arrowleft: 37,
+    arrowright: 39,
+    enter: 13,
+    return: 13,
+    " ": 32,
+    space: 32,
+    spacebar: 32,
+    shift: 16,
+    shiftleft: 16,
+    shiftright: 16,
+    control: 17,
+    ctrl: 17,
+    controlleft: 17,
+    controlright: 17,
+    alt: 18,
+    altleft: 18,
+    altright: 18,
+    tab: 9,
+    backspace: 8,
+    escape: 27,
+    esc: 27,
+    ",": 188,
+    comma: 188,
+    ".": 190,
+    period: 190,
+    "/": 191,
+    slash: 191,
+    ";": 186,
+    semicolon: 186,
+    "-": 189,
+    minus: 189,
+    "=": 187,
+    equal: 187,
+    equals: 187,
+    "[": 219,
+    "]": 221,
+    "'": 222,
+    quote: 222,
+    "`": 192,
+    backquote: 192,
+    "\\": 220,
+    backslash: 220,
+  };
+
+  if (SPECIAL[lower] !== undefined) return SPECIAL[lower];
+
+  // Numpad 0-9 & Numpad operations
+  const numpadMatch = lower.match(/^numpad(\d)$/);
+  if (numpadMatch) {
+    return 96 + parseInt(numpadMatch[1], 10);
+  }
+  if (lower === "numpadadd") return 107;
+  if (lower === "numpadsubtract") return 109;
+  if (lower === "numpadmultiply") return 106;
+  if (lower === "numpaddivide") return 111;
+  if (lower === "numpaddecimal") return 110;
+  if (lower === "numpadenter") return 13;
+
+  // Numbers 0-9
+  const digitMatch = lower.match(/^(?:digit)?(\d)$/);
+  if (digitMatch) {
+    return 48 + parseInt(digitMatch[1], 10);
+  }
+
+  // Letters a-z
+  const keyLetterMatch = lower.match(/^(?:key)?([a-z])$/);
+  if (keyLetterMatch) {
+    return 65 + (keyLetterMatch[1].charCodeAt(0) - 97);
+  }
+
+  // Fallback: if single character, uppercase charCode
+  if (trimmed.length === 1) {
+    return trimmed.toUpperCase().charCodeAt(0);
+  }
+
+  return 0;
+}
+
+/**
+ * Synchronizes a player's keyboard mapping into EmulatorJS native controls structure.
+ * EmulatorJS checks `this.controls[port][btnId].value === e.keyCode`.
+ */
+export function syncEmulatorJSControls(
+  playerSlot: number,
+  mapping: KeyboardMapping,
+  core?: string,
+): void {
+  if (typeof window === "undefined") return;
+  const port = Math.max(0, Math.min(3, (Number(playerSlot) || 1) - 1));
+  const actionMap = getCoreActionToButtonId(core || getRomCore() || "segaMD");
+  const win = window as unknown as {
+    EJS_emulator?: {
+      controls?: Record<number, Record<number, { value?: number | string }>>;
+    };
+  };
+
+  const ejsControls = win.EJS_emulator?.controls;
+  if (!ejsControls || !ejsControls[port]) return;
+
+  for (const [action, key] of Object.entries(mapping)) {
+    const btnId = actionMap[action.toLowerCase()];
+    if (btnId !== undefined && key) {
+      const code = keyNameToKeyCode(key);
+      if (!ejsControls[port][btnId]) {
+        ejsControls[port][btnId] = {};
+      }
+      ejsControls[port][btnId].value = code;
+    }
+  }
+}
+
+/**
  * Simulates controller input into EmulatorJS directly via the C-core GameManager,
  * falling back to synthetic KeyboardEvents if the C-core is not ready.
  * Dual-routes directionals to both D-Pad and Left Analog Stick for PSX/N64.
@@ -603,12 +727,14 @@ export function simulateEmulatorInput(
   if (gm) {
     const sendToGm = (buttonIndex: number) => {
       try {
-        if (typeof gm.functions?.simulateInput === "function") {
-          gm.functions.simulateInput(port, buttonIndex, isDown ? 1 : 0);
-          return true;
-        }
         if (typeof gm.simulateInput === "function") {
           gm.simulateInput(port, buttonIndex, isDown ? 1 : 0);
+          return true;
+        }
+      } catch {}
+      try {
+        if (typeof gm.functions?.simulateInput === "function") {
+          gm.functions.simulateInput(port, buttonIndex, isDown ? 1 : 0);
           return true;
         }
       } catch {}
@@ -662,20 +788,22 @@ export function simulateEmulatorInput(
     };
   }
 
+  const numericKeyCode = keyNameToKeyCode(keyAction.key) || keyAction.keyCode || 0;
+
   const target = win.EJS_emulator?.elements?.parent || document.getElementById("game") || window;
   const eventType = isDown ? "keydown" : "keyup";
   const event = new KeyboardEvent(eventType, {
     key: keyAction.key,
     code: keyAction.code,
-    keyCode: keyAction.keyCode,
-    which: keyAction.keyCode,
+    keyCode: numericKeyCode,
+    which: numericKeyCode,
     bubbles: true,
     cancelable: true,
   });
 
   try {
-    Object.defineProperty(event, "keyCode", { get: () => keyAction.keyCode });
-    Object.defineProperty(event, "which", { get: () => keyAction.keyCode });
+    Object.defineProperty(event, "keyCode", { get: () => numericKeyCode });
+    Object.defineProperty(event, "which", { get: () => numericKeyCode });
   } catch {}
 
   target.dispatchEvent(event);

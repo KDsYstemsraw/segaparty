@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Monitor, Tv, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { syncEmulatorJSControls, loadPlayerKeyboardMapping } from "@/lib/gamepadMapping";
 
 export interface EmulatorProps {
   romUrl: string;
@@ -18,8 +19,9 @@ declare global {
     EJS_gameUrl: string;
     EJS_pathtodata: string;
     EJS_startOnLoaded: boolean;
-    EJS_defaultControls?: Record<number, Record<number, { value: string; value2?: string }>>;
+    EJS_defaultControls?: Record<number, Record<number, { value: string | number; value2?: string }>>;
     EJS_onGameStart: () => void;
+    EJS_on?: (event: string, ...args: unknown[]) => void;
     EJS_disableDatabases?: boolean;
     EJS_disableLocalStorage?: boolean;
     EJS_defaultOptions?: Record<string, string>;
@@ -223,6 +225,7 @@ function teardownEmulator() {
   delete (window as unknown as { AL?: unknown }).AL;
   delete (window as unknown as { FS?: unknown }).FS;
   delete (window as unknown as Record<string, unknown>).EJS_onGameStart;
+  delete (window as unknown as Record<string, unknown>).EJS_on;
   delete (window as unknown as Record<string, unknown>).EJS_defaultControls;
 }
 
@@ -283,11 +286,47 @@ export function Emulator({
 
     streamReadyFired.current = false;
 
+    // Track all pending timers for cleanup
+    const pendingTimeouts: ReturnType<typeof setTimeout>[] = [];
+
     window.EJS_player = "#game";
     window.EJS_core = core || "segaMD";
     window.EJS_gameUrl = romUrl;
     window.EJS_pathtodata = "/emulatorjs/";
     window.EJS_startOnLoaded = true;
+
+    const syncAllControls = () => {
+      for (let slot = 1; slot <= 4; slot++) {
+        syncEmulatorJSControls(slot, loadPlayerKeyboardMapping(slot), core);
+      }
+    };
+
+    // When window.EJS_on or on("ready") / on("start") fires, synchronize all 4 player controls
+    const prevEJSOn = window.EJS_on;
+    window.EJS_on = (event: string, ...args: unknown[]) => {
+      if (event === "ready" || event === "start" || event === "load") {
+        syncAllControls();
+      }
+      if (typeof prevEJSOn === "function") {
+        (prevEJSOn as Function)(event, ...args);
+      }
+    };
+
+    // Synchronize controls at 500ms and 1500ms intervals to ensure sync after Wasm controls initialization
+    pendingTimeouts.push(setTimeout(syncAllControls, 500));
+    pendingTimeouts.push(setTimeout(syncAllControls, 1500));
+
+    // Listen for controls-mapping-changed events
+    const handleControlsMappingChanged = (e: Event) => {
+      const customEvt = e as CustomEvent<{ playerSlot?: number }>;
+      const slot = customEvt.detail?.playerSlot;
+      if (slot) {
+        syncEmulatorJSControls(slot, loadPlayerKeyboardMapping(slot), core);
+      } else {
+        syncAllControls();
+      }
+    };
+    window.addEventListener("controls-mapping-changed", handleControlsMappingChanged);
     window.EJS_disableDatabases = true;
     window.EJS_disableLocalStorage = true;
     window.EJS_threads = typeof window !== "undefined" && Boolean(window.crossOriginIsolated);
@@ -366,8 +405,6 @@ export function Emulator({
       },
     };
 
-    // Track all pending timers for cleanup
-    const pendingTimeouts: ReturnType<typeof setTimeout>[] = [];
     let audioPollId: ReturnType<typeof setInterval> | null = null;
     let audioPollTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -582,6 +619,7 @@ export function Emulator({
     };
 
     window.EJS_onGameStart = () => {
+      syncAllControls();
       if (tryCapture()) return;
       pendingTimeouts.push(setTimeout(tryCapture, 400));
       pendingTimeouts.push(setTimeout(tryCapture, 1200));
@@ -623,6 +661,8 @@ export function Emulator({
     document.body.appendChild(script);
 
     return () => {
+      window.removeEventListener("controls-mapping-changed", handleControlsMappingChanged);
+
       // Clear all tracked timers
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
