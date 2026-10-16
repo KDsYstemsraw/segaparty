@@ -61,6 +61,194 @@ function installWebGLCaptureHook() {
   proto.__webglPatched = true;
 }
 
+interface ExtendedAudioContext extends AudioContext {
+  __captureBus?: GainNode;
+  __streamDest?: MediaStreamAudioDestinationNode;
+  __pcmTap?: ScriptProcessorNode;
+  __silentGain?: GainNode;
+  __attachedSources?: WeakSet<AudioNode>;
+}
+
+interface OpenALContext {
+  audioCtx: ExtendedAudioContext;
+  sources?: Record<string, { gain?: AudioNode } | undefined> | Array<{ gain?: AudioNode } | undefined>;
+}
+
+let activeAudioCtx: ExtendedAudioContext | null = null;
+
+function getOpenALContext(): OpenALContext | null {
+  if (typeof window === "undefined") return null;
+  const win = window as unknown as {
+    EJS_emulator?: { Module?: { AL?: { currentCtx?: OpenALContext } } };
+    EmulatorJS?: { Module?: { AL?: { currentCtx?: OpenALContext } } };
+    Module?: { AL?: { currentCtx?: OpenALContext } };
+    AL?: { currentCtx?: OpenALContext };
+  };
+
+  const al =
+    win.EJS_emulator?.Module?.AL ||
+    win.EmulatorJS?.Module?.AL ||
+    win.Module?.AL ||
+    win.AL;
+
+  if (al?.currentCtx?.audioCtx) {
+    return al.currentCtx;
+  }
+  return null;
+}
+
+function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
+  bus: GainNode;
+  streamDest?: MediaStreamAudioDestinationNode;
+  track?: MediaStreamTrack;
+} {
+  activeAudioCtx = audioCtx;
+
+  if (!audioCtx.__captureBus) {
+    const bus = audioCtx.createGain();
+    bus.gain.value = 1.0;
+    (bus as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
+    audioCtx.__captureBus = bus;
+    console.debug("[audio-host] bus created");
+  }
+  const bus = audioCtx.__captureBus;
+
+  if (!audioCtx.__streamDest && typeof audioCtx.createMediaStreamDestination === "function") {
+    try {
+      const dest = audioCtx.createMediaStreamDestination();
+      bus.connect(dest);
+      audioCtx.__streamDest = dest;
+      window.__emulatorAudioStream = dest.stream;
+    } catch (e) {
+      console.warn("[audio-host] failed to create media stream destination:", e);
+    }
+  }
+
+  // Setup ScriptProcessor for PCM tap if not already set up
+  if (!audioCtx.__pcmTap && typeof audioCtx.createScriptProcessor === "function") {
+    try {
+      const pcmTap = audioCtx.createScriptProcessor(2048, 1, 1);
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0;
+      (pcmTap as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
+      (silentGain as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
+
+      pcmTap.onaudioprocess = (e: AudioProcessingEvent) => {
+        const cb = window.__onEmulatorAudioChunk;
+        if (!cb) return;
+
+        const input = e.inputBuffer.getChannelData(0);
+        let hasSound = false;
+        for (let i = 0; i < input.length; i++) {
+          if (Math.abs(input[i]) > 0.001) {
+            hasSound = true;
+            break;
+          }
+        }
+        if (!hasSound) return;
+
+        // Downsample by 2x if sampleRate >= 44100 to conserve bandwidth
+        const downsample = audioCtx.sampleRate >= 44100;
+        const step = downsample ? 2 : 1;
+        const outLen = Math.floor(input.length / step);
+        const int16 = new Int16Array(outLen);
+        const outSampleRate = downsample ? Math.floor(audioCtx.sampleRate / 2) : audioCtx.sampleRate;
+
+        let outIdx = 0;
+        for (let i = 0; i < input.length; i += step) {
+          const s = Math.max(-1, Math.min(1, input[i]));
+          int16[outIdx++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
+
+        // Encode to Base64
+        const uint8 = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
+        let binary = "";
+        const chunkSize = 8192;
+        for (let i = 0; i < uint8.length; i += chunkSize) {
+          const sub = uint8.subarray(i, i + chunkSize);
+          binary += String.fromCharCode.apply(null, sub as unknown as number[]);
+        }
+        const base64 = btoa(binary);
+        cb(base64, outSampleRate);
+      };
+
+      audioCtx.__pcmTap = pcmTap;
+      audioCtx.__silentGain = silentGain;
+
+      bus.connect(pcmTap);
+      pcmTap.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
+    } catch (e) {
+      console.warn("[audio-host] PCM audio tap setup failed:", e);
+    }
+  }
+
+  if (!audioCtx.__attachedSources) {
+    audioCtx.__attachedSources = new WeakSet<AudioNode>();
+  }
+
+  const track = audioCtx.__streamDest?.stream.getAudioTracks()[0];
+  return {
+    bus,
+    streamDest: audioCtx.__streamDest,
+    track,
+  };
+}
+
+function attachOpenALAudio(): MediaStreamTrack | null {
+  const alCtx = getOpenALContext();
+  if (alCtx?.audioCtx) {
+    const audioCtx = alCtx.audioCtx;
+    const { bus, track } = ensureCaptureBus(audioCtx);
+
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume().then(() => {
+        console.debug("[audio-host] ctx resumed");
+      }).catch(() => {});
+    }
+
+    const sources = alCtx.sources;
+    if (sources) {
+      const attached = audioCtx.__attachedSources || (audioCtx.__attachedSources = new WeakSet<AudioNode>());
+      for (const key in sources) {
+        const src = (sources as Record<string, { gain?: AudioNode } | undefined>)[key];
+        if (src?.gain && !attached.has(src.gain)) {
+          try {
+            src.gain.connect(bus);
+            attached.add(src.gain);
+            console.debug("[audio-host] source attached");
+          } catch (e) {
+            console.warn("[audio-host] failed to connect source gain:", e);
+          }
+        }
+      }
+    }
+
+    if (track) {
+      if (!(track as unknown as { __loggedReady?: boolean }).__loggedReady) {
+        (track as unknown as { __loggedReady?: boolean }).__loggedReady = true;
+        console.debug("[audio-host] track ready", track.id);
+      }
+      return track;
+    }
+  }
+
+  // Fallback to window.__emulatorAudioStream if available
+  if (window.__emulatorAudioStream) {
+    const tracks = window.__emulatorAudioStream.getAudioTracks();
+    if (tracks.length > 0) {
+      const track = tracks[0];
+      if (!(track as unknown as { __loggedReady?: boolean }).__loggedReady) {
+        (track as unknown as { __loggedReady?: boolean }).__loggedReady = true;
+        console.debug("[audio-host] track ready", track.id);
+      }
+      return track;
+    }
+  }
+
+  return null;
+}
+
 // Intercept Web Audio connections so emulator audio is mirrored to a MediaStream and PCM tap
 function installAudioCaptureHook() {
   if (typeof window === "undefined") return;
@@ -74,86 +262,23 @@ function installAudioCaptureHook() {
 
   proto.connect = function (this: AudioNode, destination: unknown, ...rest: unknown[]) {
     try {
-      const ctx = this.context as AudioContext | undefined;
+      const ctx = this.context as ExtendedAudioContext | undefined;
       const isInternal = (this as unknown as { __isInternalAudio?: boolean }).__isInternalAudio;
       if (ctx && destination === ctx.destination && !isInternal) {
-        // 1. MediaStreamDestination for WebRTC
-        if (typeof ctx.createMediaStreamDestination === "function") {
-          if (!(ctx as unknown as { __streamDest?: MediaStreamAudioDestinationNode }).__streamDest) {
-            const streamDest = ctx.createMediaStreamDestination();
-            (ctx as unknown as { __streamDest: MediaStreamAudioDestinationNode }).__streamDest = streamDest;
-            window.__emulatorAudioStream = streamDest.stream;
-          }
-          const streamDest = (ctx as unknown as { __streamDest?: MediaStreamAudioDestinationNode }).__streamDest;
-          if (streamDest) {
-            origConnect.call(this, streamDest as unknown as AudioNode);
-          }
+        if (ctx.state === "suspended") {
+          ctx.resume().then(() => {
+            console.debug("[audio-host] ctx resumed");
+          }).catch(() => {});
         }
 
-        // 2. PCM Audio Chunk Tap via ScriptProcessorNode for WebSocket broadcast
-        if (
-          !(ctx as unknown as { __pcmTap?: ScriptProcessorNode }).__pcmTap &&
-          typeof ctx.createScriptProcessor === "function"
-        ) {
+        const { bus } = ensureCaptureBus(ctx);
+        const attached = ctx.__attachedSources || (ctx.__attachedSources = new WeakSet<AudioNode>());
+        if (!attached.has(this)) {
           try {
-            const pcmTap = ctx.createScriptProcessor(2048, 1, 1);
-            const silentGain = ctx.createGain();
-            silentGain.gain.value = 0;
-            (pcmTap as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
-            (silentGain as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
-
-            pcmTap.onaudioprocess = (e: AudioProcessingEvent) => {
-              const cb = window.__onEmulatorAudioChunk;
-              if (!cb) return;
-
-              const input = e.inputBuffer.getChannelData(0);
-              let hasSound = false;
-              for (let i = 0; i < input.length; i++) {
-                if (Math.abs(input[i]) > 0.001) {
-                  hasSound = true;
-                  break;
-                }
-              }
-              if (!hasSound) return;
-
-              // Downsample by 2x if sampleRate >= 44100 to conserve bandwidth
-              const downsample = ctx.sampleRate >= 44100;
-              const step = downsample ? 2 : 1;
-              const outLen = Math.floor(input.length / step);
-              const int16 = new Int16Array(outLen);
-              const outSampleRate = downsample ? Math.floor(ctx.sampleRate / 2) : ctx.sampleRate;
-
-              let outIdx = 0;
-              for (let i = 0; i < input.length; i += step) {
-                const s = Math.max(-1, Math.min(1, input[i]));
-                int16[outIdx++] = s < 0 ? s * 0x8000 : s * 0x7fff;
-              }
-
-              // Encode to Base64
-              const uint8 = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
-              let binary = "";
-              const chunkSize = 8192;
-              for (let i = 0; i < uint8.length; i += chunkSize) {
-                const sub = uint8.subarray(i, i + chunkSize);
-                binary += String.fromCharCode.apply(null, sub as unknown as number[]);
-              }
-              const base64 = btoa(binary);
-              cb(base64, outSampleRate);
-            };
-
-            (ctx as unknown as { __pcmTap: ScriptProcessorNode }).__pcmTap = pcmTap;
-            (ctx as unknown as { __silentGain: GainNode }).__silentGain = silentGain;
-
-            origConnect.call(pcmTap, silentGain);
-            origConnect.call(silentGain, ctx.destination);
-          } catch (e) {
-            console.warn("PCM audio tap setup failed:", e);
-          }
-        }
-
-        const pcmTap = (ctx as unknown as { __pcmTap?: ScriptProcessorNode }).__pcmTap;
-        if (pcmTap) {
-          origConnect.call(this, pcmTap);
+            origConnect.call(this, bus);
+            attached.add(this);
+            console.debug("[audio-host] source attached");
+          } catch {}
         }
       }
     } catch {
@@ -221,6 +346,7 @@ function teardownEmulator() {
   document.querySelectorAll('head link[href*="emulatorjs/"]').forEach((s) => s.remove());
 
   // 5. Clean up audio streams
+  activeAudioCtx = null;
   if (window.__emulatorAudioStream) {
     window.__emulatorAudioStream.getTracks().forEach((t) => t.stop());
     window.__emulatorAudioStream = null;
@@ -253,6 +379,7 @@ export function Emulator({
 }: EmulatorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamReadyFired = useRef(false);
+  const audioTrackFiredRef = useRef(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const onStreamReadyRef = useRef(onStreamReady);
@@ -299,6 +426,7 @@ export function Emulator({
     }
 
     streamReadyFired.current = false;
+    audioTrackFiredRef.current = false;
 
     // Track all pending timers for cleanup
     const pendingTimeouts: ReturnType<typeof setTimeout>[] = [];
@@ -341,6 +469,23 @@ export function Emulator({
       }
     };
     window.addEventListener("controls-mapping-changed", handleControlsMappingChanged);
+
+    // Host user gesture listener to resume AudioContext if suspended by browser autoplay policy
+    const resumeSuspendedAudio = () => {
+      if (activeAudioCtx && activeAudioCtx.state === "suspended") {
+        activeAudioCtx.resume().then(() => {
+          console.debug("[audio-host] ctx resumed");
+        }).catch(() => {});
+      }
+      const alCtx = getOpenALContext();
+      if (alCtx?.audioCtx && alCtx.audioCtx !== activeAudioCtx && alCtx.audioCtx.state === "suspended") {
+        alCtx.audioCtx.resume().then(() => {
+          console.debug("[audio-host] ctx resumed");
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener("pointerdown", resumeSuspendedAudio);
+    window.addEventListener("keydown", resumeSuspendedAudio);
     window.EJS_disableDatabases = true;
     window.EJS_disableLocalStorage = true;
     window.EJS_threads = typeof window !== "undefined" && Boolean(window.crossOriginIsolated);
@@ -371,7 +516,6 @@ export function Emulator({
     window.EJS_defaultControls = defaultControls;
 
     let audioPollId: ReturnType<typeof setInterval> | null = null;
-    let audioPollTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
     // WebSocket / Broadcast frame capture canvas & interval (~15 FPS)
     let frameCanvas: HTMLCanvasElement | null = null;
@@ -492,35 +636,10 @@ export function Emulator({
         const composite = new MediaStream();
         composite.addTrack(videoTracks[0]);
 
-        // Capture OpenAL audio from EmulatorJS / Emscripten AL context (Playtime pattern)
-        const AL =
-          (window as unknown as { EJS_emulator?: { Module?: { AL?: unknown } } }).EJS_emulator?.Module?.AL ||
-          (window as unknown as { AL?: unknown }).AL;
-
-        if (
-          AL &&
-          (AL as { currentCtx?: { audioCtx?: AudioContext; sources?: Record<string, { gain: AudioNode }> } }).currentCtx?.audioCtx
-        ) {
-          const alContext = (AL as { currentCtx: { audioCtx: AudioContext; sources: Record<string, { gain: AudioNode }> } }).currentCtx;
-          const audioContext = alContext.audioCtx;
-          const gainNodes: AudioNode[] = [];
-          for (const sourceIdx in alContext.sources) {
-            if (alContext.sources[sourceIdx]?.gain) {
-              gainNodes.push(alContext.sources[sourceIdx].gain);
-            }
-          }
-          if (gainNodes.length > 0) {
-            const merger = audioContext.createChannelMerger(gainNodes.length);
-            gainNodes.forEach((node) => node.connect(merger));
-            const destination = audioContext.createMediaStreamDestination();
-            merger.connect(destination);
-            const audioTracks = destination.stream.getAudioTracks();
-            if (audioTracks.length > 0) {
-              composite.addTrack(audioTracks[0]);
-            }
-          }
-        } else if (window.__emulatorAudioStream) {
-          window.__emulatorAudioStream.getAudioTracks().forEach((at) => composite.addTrack(at));
+        const initialAudioTrack = attachOpenALAudio();
+        if (initialAudioTrack) {
+          composite.addTrack(initialAudioTrack);
+          audioTrackFiredRef.current = true;
         }
 
         streamReadyFired.current = true;
@@ -529,52 +648,6 @@ export function Emulator({
           pollIntervalRef.current = null;
         }
         onStreamReadyRef.current(composite);
-
-        // Check for late OpenAL audio if not yet captured initially
-        if (composite.getAudioTracks().length === 0) {
-          audioPollId = setInterval(() => {
-            const curAL =
-              (window as unknown as { EJS_emulator?: { Module?: { AL?: unknown } } }).EJS_emulator?.Module?.AL ||
-              (window as unknown as { AL?: unknown }).AL;
-            if (
-              curAL &&
-              (curAL as { currentCtx?: { audioCtx?: AudioContext; sources?: Record<string, { gain: AudioNode }> } }).currentCtx?.audioCtx &&
-              onAudioTrackAddedRef.current
-            ) {
-              const alCtx = (curAL as { currentCtx: { audioCtx: AudioContext; sources: Record<string, { gain: AudioNode }> } }).currentCtx;
-              const gNodes: AudioNode[] = [];
-              for (const sIdx in alCtx.sources) {
-                if (alCtx.sources[sIdx]?.gain) gNodes.push(alCtx.sources[sIdx].gain);
-              }
-              if (gNodes.length > 0) {
-                const m = alCtx.audioCtx.createChannelMerger(gNodes.length);
-                gNodes.forEach((n) => n.connect(m));
-                const d = alCtx.audioCtx.createMediaStreamDestination();
-                m.connect(d);
-                const aTracks = d.stream.getAudioTracks();
-                if (aTracks.length > 0) {
-                  onAudioTrackAddedRef.current(aTracks[0]);
-                  if (audioPollId) clearInterval(audioPollId);
-                  audioPollId = null;
-                  return;
-                }
-              }
-            }
-            if (window.__emulatorAudioStream && onAudioTrackAddedRef.current) {
-              const audioTracks = window.__emulatorAudioStream.getAudioTracks();
-              if (audioTracks.length > 0) {
-                onAudioTrackAddedRef.current(audioTracks[0]);
-                if (audioPollId) clearInterval(audioPollId);
-                audioPollId = null;
-              }
-            }
-          }, 800);
-
-          audioPollTimeoutId = setTimeout(() => {
-            if (audioPollId) clearInterval(audioPollId);
-            audioPollId = null;
-          }, 20000);
-        }
 
         return true;
       } catch (err) {
@@ -585,11 +658,21 @@ export function Emulator({
 
     window.EJS_onGameStart = () => {
       syncAllControls();
+      attachOpenALAudio();
       if (tryCapture()) return;
       pendingTimeouts.push(setTimeout(tryCapture, 400));
       pendingTimeouts.push(setTimeout(tryCapture, 1200));
       pendingTimeouts.push(setTimeout(tryCapture, 2500));
     };
+
+    // Persistent 1-second audio poll to attach new dynamic OpenAL sources and handle late audio initialization
+    audioPollId = setInterval(() => {
+      const track = attachOpenALAudio();
+      if (track && !audioTrackFiredRef.current) {
+        audioTrackFiredRef.current = true;
+        onAudioTrackAddedRef.current?.(track);
+      }
+    }, 1000);
 
     let pollAttempts = 0;
     pollIntervalRef.current = setInterval(() => {
@@ -646,6 +729,8 @@ export function Emulator({
 
     return () => {
       window.removeEventListener("controls-mapping-changed", handleControlsMappingChanged);
+      window.removeEventListener("pointerdown", resumeSuspendedAudio);
+      window.removeEventListener("keydown", resumeSuspendedAudio);
 
       // Clear all tracked timers
       if (pollIntervalRef.current) {
@@ -653,8 +738,10 @@ export function Emulator({
         pollIntervalRef.current = null;
       }
       for (const t of pendingTimeouts) clearTimeout(t);
-      if (audioPollId) clearInterval(audioPollId);
-      if (audioPollTimeoutId) clearTimeout(audioPollTimeoutId);
+      if (audioPollId) {
+        clearInterval(audioPollId);
+        audioPollId = null;
+      }
 
       // Clean up frame broadcast interval and canvas
       if (frameBroadcastId) {
