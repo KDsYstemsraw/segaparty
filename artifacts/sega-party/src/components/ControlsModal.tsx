@@ -11,6 +11,7 @@ import {
   Gamepad2,
   Keyboard,
   Mouse,
+  MessageSquare,
   RotateCcw,
   Circle,
   Wand2,
@@ -199,6 +200,28 @@ export function getConsoleActions(coreId?: string): ConsoleActionInfo[] {
   ];
 }
 
+export function loadChatHotkey(playerSlot?: number): string {
+  try {
+    const key = `retroparty-chat-hotkey-p${playerSlot || 1}`;
+    const stored = localStorage.getItem(key) || localStorage.getItem("retroparty-chat-hotkey");
+    if (stored) return stored;
+  } catch {}
+  return "Enter";
+}
+
+export function saveChatHotkey(hotkey: string, playerSlot?: number): void {
+  try {
+    const key = `retroparty-chat-hotkey-p${playerSlot || 1}`;
+    localStorage.setItem(key, hotkey);
+    localStorage.setItem("retroparty-chat-hotkey", hotkey);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("chat-hotkey-changed", { detail: { hotkey, playerSlot } })
+      );
+    }
+  } catch {}
+}
+
 const NUMPAD_KEYBOARD_MAPPING: KeyboardMapping = {
   up: "8",
   down: "2",
@@ -216,9 +239,24 @@ const NUMPAD_KEYBOARD_MAPPING: KeyboardMapping = {
   r1: "*",
   l2: "-",
   r2: "+",
-  start: "Enter",
+  start: "Backspace",
   mode: "0",
   select: "0",
+};
+
+const DEFAULT_PRESET: KeyboardMapping = {
+  ...DEFAULT_KEYBOARD_MAPPING,
+  start: "Backspace",
+};
+
+const WASD_PRESET: KeyboardMapping = {
+  ...WASD_KEYBOARD_MAPPING,
+  start: "Backspace",
+};
+
+const NUMPAD_PRESET: KeyboardMapping = {
+  ...NUMPAD_KEYBOARD_MAPPING,
+  start: "Backspace",
 };
 
 function playBeep() {
@@ -262,6 +300,10 @@ export function ControlsModal({
 
   // Unified single-button rebinding action ID
   const [listeningActionId, setListeningActionId] = useState<string | null>(null);
+
+  // In-Game Chat Overlay Hotkey state
+  const [chatHotkey, setChatHotkey] = useState<string>(() => loadChatHotkey(selectedSlot));
+  const [listeningChatHotkey, setListeningChatHotkey] = useState(false);
 
   // Connected gamepad diagnostic
   const [connectedPad, setConnectedPad] = useState<string | null>(null);
@@ -342,12 +384,15 @@ export function ControlsModal({
     if (open) {
       setMapping(loadPlayerGamepadMapping(selectedSlot));
       setKbMapping(loadPlayerKeyboardMapping(selectedSlot));
+      setChatHotkey(loadChatHotkey(selectedSlot));
       setIsWizardActive(false);
       setWizardCompleted(false);
       setListeningActionId(null);
+      setListeningChatHotkey(false);
       releaseAllInputs();
     } else {
       releaseAllInputs();
+      setListeningChatHotkey(false);
     }
   }, [selectedSlot, open, releaseAllInputs]);
 
@@ -493,6 +538,26 @@ export function ControlsModal({
     if (!open) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // 0. Chat Hotkey Rebinding
+      if (listeningChatHotkey) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (e.key === "Escape") {
+          setListeningChatHotkey(false);
+          return;
+        }
+
+        const newKey = e.key;
+        playBeep();
+        setChatHotkey(newKey);
+        saveChatHotkey(newKey, selectedSlot);
+        setListeningChatHotkey(false);
+        setToastMessage(`Chat Overlay key set to [${formatBindingLabel(newKey)}]!`);
+        setTimeout(() => setToastMessage(null), 3000);
+        return;
+      }
+
       // 1. Wizard Key Capture
       if (isWizardActive) {
         e.preventDefault();
@@ -592,6 +657,7 @@ export function ControlsModal({
   }, [
     open,
     listeningActionId,
+    listeningChatHotkey,
     isWizardActive,
     wizardStepIndex,
     actions,
@@ -814,12 +880,15 @@ export function ControlsModal({
 
   const resetAllDefaults = () => {
     playBeep();
-    const defaultKb = selectedSlot === 2 ? WASD_KEYBOARD_MAPPING : DEFAULT_KEYBOARD_MAPPING;
+    const defaultKb = selectedSlot === 2 ? WASD_PRESET : DEFAULT_PRESET;
     setKbMapping(defaultKb);
     savePlayerKeyboardMapping(selectedSlot, defaultKb);
 
     setMapping(DEFAULT_MAPPING);
     savePlayerGamepadMapping(selectedSlot, DEFAULT_MAPPING);
+
+    saveChatHotkey("Enter", selectedSlot);
+    setChatHotkey("Enter");
 
     setToastMessage(`Reset Player ${selectedSlot} to factory defaults!`);
     setTimeout(() => setToastMessage(null), 3000);
@@ -986,7 +1055,7 @@ export function ControlsModal({
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => applyPreset(DEFAULT_KEYBOARD_MAPPING, "Arrow Keys")}
+                  onClick={() => applyPreset(DEFAULT_PRESET, "Arrow Keys")}
                   className="h-8 text-xs font-semibold rounded-xl border-white/10 hover:border-primary/50 bg-white/[0.02] hover:bg-white/[0.08] gap-1.5"
                 >
                   <Keyboard className="w-3.5 h-3.5 text-cyan-400" />
@@ -997,7 +1066,7 @@ export function ControlsModal({
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => applyPreset(WASD_KEYBOARD_MAPPING, "WASD")}
+                  onClick={() => applyPreset(WASD_PRESET, "WASD")}
                   className="h-8 text-xs font-semibold rounded-xl border-white/10 hover:border-primary/50 bg-white/[0.02] hover:bg-white/[0.08] gap-1.5"
                 >
                   <Keyboard className="w-3.5 h-3.5 text-amber-400" />
@@ -1008,7 +1077,7 @@ export function ControlsModal({
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => applyPreset(NUMPAD_KEYBOARD_MAPPING, "Numpad")}
+                  onClick={() => applyPreset(NUMPAD_PRESET, "Numpad")}
                   className="h-8 text-xs font-semibold rounded-xl border-white/10 hover:border-primary/50 bg-white/[0.02] hover:bg-white/[0.08] gap-1.5"
                 >
                   <Keyboard className="w-3.5 h-3.5 text-purple-400" />
@@ -1024,6 +1093,50 @@ export function ControlsModal({
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Reset Defaults</span>
+                </Button>
+              </div>
+            </div>
+
+            {/* 3. In-Game Chat Overlay Hotkey & Isolated Controls Bar */}
+            <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-primary/20 border border-primary/40 flex items-center justify-center text-primary shrink-0">
+                  <MessageSquare className="w-4 h-4 text-accent" />
+                </div>
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-foreground font-sans flex items-center gap-1.5">
+                      🔒 Isolated Virtual Controls
+                    </span>
+                    <Badge variant="outline" className="text-[10px] font-mono py-0 px-2 rounded-full border-emerald-500/40 text-emerald-400 bg-emerald-500/10 font-bold">
+                      Zero Key Conflicts
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground font-sans">
+                    All players can use the exact same hotkeys (like WASD or Arrows) without interfering with other players.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                <span className="text-xs font-bold text-muted-foreground font-sans">
+                  💬 Chat Overlay Key:
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setListeningChatHotkey(true)}
+                  className={cn(
+                    "h-8 px-3 rounded-xl text-xs font-bold transition-all border",
+                    listeningChatHotkey
+                      ? "bg-accent text-accent-foreground border-accent shadow-[0_0_15px_rgba(224,0,11,0.6)] animate-pulse ring-2 ring-accent"
+                      : "bg-white/[0.04] hover:bg-white/[0.08] text-foreground border-white/15"
+                  )}
+                  title="Click to change Chat Overlay Hotkey"
+                >
+                  <Keyboard className="w-3.5 h-3.5 text-accent" />
+                  <span>{listeningChatHotkey ? "Press any key..." : formatBindingLabel(chatHotkey)}</span>
                 </Button>
               </div>
             </div>

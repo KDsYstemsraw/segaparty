@@ -19,6 +19,7 @@ import {
   getPlayerActionKey,
   simulateEmulatorInput,
   loadPlayerKeyboardMapping,
+  loadChatHotkey,
   formatKeyLabel,
   getConsoleActions,
   mouseButtonToToken,
@@ -29,6 +30,7 @@ import { useGamepad } from "@/hooks/useGamepad";
 import { ControlsModal } from "@/components/ControlsModal";
 import { ControllerSlots } from "@/components/ControllerSlots";
 import { ChatPanel } from "@/components/ChatPanel";
+import { InGameChatOverlay } from "@/components/InGameChatOverlay";
 import { TouchGamepad } from "@/components/TouchGamepad";
 import { InviteModal } from "@/components/InviteModal";
 import { RomFilePicker } from "@/components/RomFilePicker";
@@ -66,6 +68,7 @@ import {
   Crown,
   UserPlus,
   Check,
+  MessageSquare,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
@@ -129,6 +132,7 @@ export default function SessionPage() {
   // Modals state
   const [controlsOpen, setControlsOpen] = useState(false);
   const [controlsSlot, setControlsSlot] = useState<number | undefined>(undefined);
+  const [chatOverlayOpen, setChatOverlayOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [joinPromptOpen, setJoinPromptOpen] = useState(false);
   const [romPickerOpen, setRomPickerOpen] = useState(false);
@@ -192,9 +196,17 @@ export default function SessionPage() {
   const effectiveSlot = mySlot ?? (!isHost ? 2 : 1);
 
   const [keyboardMapping, setKeyboardMapping] = useState(() => loadPlayerKeyboardMapping(effectiveSlot));
+  const [chatHotkey, setChatHotkey] = useState<string>(() => loadChatHotkey(effectiveSlot));
 
   useEffect(() => {
     setKeyboardMapping(loadPlayerKeyboardMapping(effectiveSlot));
+  }, [effectiveSlot]);
+
+  useEffect(() => {
+    const syncHotkey = () => setChatHotkey(loadChatHotkey(effectiveSlot));
+    syncHotkey();
+    window.addEventListener("chat-hotkey-changed", syncHotkey);
+    return () => window.removeEventListener("chat-hotkey-changed", syncHotkey);
   }, [effectiveSlot]);
 
   useEffect(() => {
@@ -272,6 +284,30 @@ export default function SessionPage() {
     },
     [code, isHost, activeCore],
   );
+
+  // Helper to release all currently active/held buttons when opening chat or modals
+  const releaseAllHeldButtons = useCallback(() => {
+    setActiveButtons((prev) => {
+      if (prev.size === 0) return prev;
+      prev.forEach((act) => {
+        handleInputEvent({
+          type: "keyup",
+          playerIndex: effectiveSlot,
+          action: act,
+          key: act,
+          keyCode: 0,
+          code: act,
+        });
+      });
+      return new Set();
+    });
+  }, [effectiveSlot, handleInputEvent]);
+
+  useEffect(() => {
+    if (controlsOpen || chatOverlayOpen) {
+      releaseAllHeldButtons();
+    }
+  }, [controlsOpen, chatOverlayOpen, releaseAllHeldButtons]);
 
   useGamepad(effectiveSlot, handleInputEvent, handleButtonActivity);
 
@@ -367,14 +403,23 @@ export default function SessionPage() {
         dc.onmessage = (e) => {
           try {
             const input = JSON.parse(e.data) as PlayerInputEvent;
-            let guestSlot = Number(input.playerIndex) || 2;
+            let assignedSlot: number | null = null;
             for (const s of [1, 2, 3, 4]) {
               if (slotAssignmentsRef.current[s]?.peerId === guestPeerId) {
-                guestSlot = s;
+                assignedSlot = s;
                 break;
               }
             }
-            (simulateEmulatorInput as any)(guestSlot, input.action, input.type === "keydown", activeCore);
+            if (assignedSlot !== null) {
+              (simulateEmulatorInput as any)(assignedSlot, input.action, input.type === "keydown", activeCore);
+            } else {
+              // Peer is a spectator or has no slot. If requested slot is owned by someone else, ignore!
+              const requestedSlot = Number(input.playerIndex) || 2;
+              const owner = slotAssignmentsRef.current[requestedSlot];
+              if (!owner || owner.peerId === guestPeerId) {
+                (simulateEmulatorInput as any)(requestedSlot, input.action, input.type === "keydown", activeCore);
+              }
+            }
           } catch {}
         };
 
@@ -761,8 +806,28 @@ export default function SessionPage() {
           msg.input
         ) {
           const input = msg.input as PlayerInputEvent;
+          const fromPeerId = msg.fromPeerId as string | undefined;
+          let verifiedSlot = Number(input.playerIndex) || 2;
+          if (fromPeerId) {
+            let assignedSlot: number | null = null;
+            for (const s of [1, 2, 3, 4]) {
+              if (slotAssignmentsRef.current[s]?.peerId === fromPeerId) {
+                assignedSlot = s;
+                break;
+              }
+            }
+            if (assignedSlot !== null) {
+              verifiedSlot = assignedSlot;
+            } else {
+              // Guest has no assigned slot (spectator). If verifiedSlot has an owner, ignore input!
+              const owner = slotAssignmentsRef.current[verifiedSlot];
+              if (owner && owner.peerId !== fromPeerId) {
+                return;
+              }
+            }
+          }
           (simulateEmulatorInput as any)(
-            input.playerIndex || 2,
+            verifiedSlot,
             input.action,
             input.type === "keydown",
             activeCore,
@@ -1054,7 +1119,7 @@ export default function SessionPage() {
     [code],
   );
 
-  // Keyboard & Mouse input forwarding for assigned player slots
+  // Capture-Phase Keyboard & Mouse input forwarding for assigned player slots
   useEffect(() => {
     const activeSlot = effectiveSlot;
 
@@ -1072,26 +1137,69 @@ export default function SessionPage() {
     }
 
     const forwardKey = (e: KeyboardEvent, type: "keydown" | "keyup") => {
-      // Ignore synthetic events dispatched by handleInputEvent to prevent infinite loop
+      // 1. Allow Synthetic Internal Emulator Events dispatched by simulateEmulatorInput
+      if ((e as unknown as { __isInternalEmulatorKey?: boolean }).__isInternalEmulatorKey) {
+        return;
+      }
       if (!e.isTrusted) return;
 
+      // 2. When Controls Modal or Join Modal is Open, block game inputs
+      if (controlsOpen || joinPromptOpen || romPickerOpen || inviteOpen) {
+        const gameEl = document.getElementById("game");
+        if (gameEl && (gameEl.contains(e.target as Node) || document.activeElement === gameEl)) {
+          e.stopPropagation();
+        }
+        return;
+      }
+
+      // 3. When Typing in Chat or Any Input/Textarea: never trigger game controls
       const activeEl = document.activeElement as HTMLElement | null;
       const isTextEntry =
-        activeEl &&
-        (activeEl.tagName === "TEXTAREA" ||
-          (activeEl.tagName === "INPUT" &&
-            (activeEl as HTMLInputElement).type !== "range" &&
-            (activeEl as HTMLInputElement).type !== "button" &&
-            (activeEl as HTMLInputElement).type !== "checkbox"));
-      if (isTextEntry) return;
+        chatOverlayOpen ||
+        (activeEl &&
+          (activeEl.tagName === "TEXTAREA" ||
+            (activeEl.tagName === "INPUT" &&
+              (activeEl as HTMLInputElement).type !== "range" &&
+              (activeEl as HTMLInputElement).type !== "button" &&
+              (activeEl as HTMLInputElement).type !== "checkbox")));
+      if (isTextEntry) {
+        const gameEl = document.getElementById("game");
+        if (gameEl && (gameEl.contains(e.target as Node) || document.activeElement === gameEl)) {
+          e.stopPropagation();
+        }
+        return;
+      }
 
+      // 4. Chat Overlay Hotkey Trigger (Enter / Return or custom chatHotkey)
+      const activeChatKey = chatHotkey || "Enter";
+      const isChatTrigger =
+        e.key === activeChatKey ||
+        e.code === activeChatKey ||
+        e.key.toLowerCase() === activeChatKey.toLowerCase();
+      if (type === "keydown" && !e.repeat && isChatTrigger) {
+        e.preventDefault();
+        e.stopPropagation();
+        releaseAllHeldButtons();
+        setChatOverlayOpen(true);
+        return;
+      }
+
+      // 5. Mapped Game Key for Local Player (effectiveSlot Only)
       const action = activeKeyMap[e.key] || activeKeyMap[e.key.toLowerCase()];
-      if (!action) return;
+      if (!action) {
+        // The user pressed a random / unbound key! Block it from reaching #game so EmulatorJS never sees random presses
+        const gameEl = document.getElementById("game");
+        if (gameEl && (gameEl.contains(e.target as Node) || document.activeElement === gameEl)) {
+          e.stopPropagation();
+        }
+        return;
+      }
 
       e.preventDefault();
+      e.stopPropagation();
       handleButtonActivity(action, type === "keydown");
 
-      const keyInfo = getPlayerActionKey(activeSlot, action) || {
+      const keyInfo = (getPlayerActionKey as any)(activeSlot, action, activeCore) || {
         key: e.key,
         keyCode: e.keyCode,
         code: e.code,
@@ -1160,19 +1268,33 @@ export default function SessionPage() {
       }
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("keyup", onKeyUp, { capture: true });
     window.addEventListener("mousedown", onMouseDown);
     window.addEventListener("mouseup", onMouseUp);
     window.addEventListener("contextmenu", onContextMenu);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
+      window.removeEventListener("keyup", onKeyUp, { capture: true });
       window.removeEventListener("mousedown", onMouseDown);
       window.removeEventListener("mouseup", onMouseUp);
       window.removeEventListener("contextmenu", onContextMenu);
     };
-  }, [effectiveSlot, isHost, keyboardMapping, handleInputEvent, handleButtonActivity]);
+  }, [
+    effectiveSlot,
+    isHost,
+    activeCore,
+    keyboardMapping,
+    chatHotkey,
+    chatOverlayOpen,
+    controlsOpen,
+    joinPromptOpen,
+    romPickerOpen,
+    inviteOpen,
+    handleInputEvent,
+    handleButtonActivity,
+    releaseAllHeldButtons,
+  ]);
 
 
   const handleLoadRomFile = async (file: File) => {
@@ -1539,8 +1661,39 @@ export default function SessionPage() {
                     onVideoFrame={handleVideoFrame}
                     onAudioChunk={handleAudioChunk}
                   />
+
+                  {/* On-Screen In-Game Chat Overlay (Host) */}
+                  <InGameChatOverlay
+                    messages={messages}
+                    participants={displayParticipants}
+                    slots={slots}
+                    myPeerId={myPeerId.current}
+                    isOpen={chatOverlayOpen}
+                    onOpenChange={(open) => {
+                      if (open) releaseAllHeldButtons();
+                      setChatOverlayOpen(open);
+                    }}
+                    onSendMessage={handleSendMessage}
+                    chatHotkey={chatHotkey}
+                  />
+
                   {/* Floating Frosted Glass In-Stream Controls Overlay (Host) */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 z-20 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => setChatOverlayOpen((v) => !v)}
+                      className={cn(
+                        "w-7 h-7 rounded-lg transition-colors",
+                        chatOverlayOpen
+                          ? "bg-primary/20 text-primary border border-primary/40 shadow-[0_0_10px_rgba(0,140,255,0.3)]"
+                          : "text-muted-foreground hover:text-foreground hover:bg-white/10"
+                      )}
+                      title={chatOverlayOpen ? "Close On-Screen Chat" : `Open Chat (${chatHotkey || "Enter"})`}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                    </Button>
+                    <div className="w-px h-4 bg-white/10" />
                     <Button
                       size="icon"
                       variant="ghost"
@@ -1591,6 +1744,21 @@ export default function SessionPage() {
               >
                 {(remoteStream || hasWsStream) ? (
                   <>
+                    {/* On-Screen In-Game Chat Overlay (Guest) */}
+                    <InGameChatOverlay
+                      messages={messages}
+                      participants={displayParticipants}
+                      slots={slots}
+                      myPeerId={myPeerId.current}
+                      isOpen={chatOverlayOpen}
+                      onOpenChange={(open) => {
+                        if (open) releaseAllHeldButtons();
+                        setChatOverlayOpen(open);
+                      }}
+                      onSendMessage={handleSendMessage}
+                      chatHotkey={chatHotkey}
+                    />
+
                     {/* WebSocket Fallback Live Image Stream */}
                     <img
                       ref={wsImgRef}
@@ -1738,6 +1906,26 @@ export default function SessionPage() {
                       >
                         <Tv className="w-3.5 h-3.5" />
                       </Button>
+
+                      <div className="w-px h-4 bg-white/10" />
+
+                      {/* On-Screen Chat Toggle */}
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => setChatOverlayOpen((v) => !v)}
+                        className={cn(
+                          "w-7 h-7 rounded-lg transition-colors",
+                          chatOverlayOpen
+                            ? "bg-primary/20 text-primary border border-primary/40 shadow-[0_0_10px_rgba(0,140,255,0.3)]"
+                            : "text-muted-foreground hover:text-foreground hover:bg-white/10"
+                        )}
+                        title={chatOverlayOpen ? "Close On-Screen Chat" : `Open Chat (${chatHotkey || "Enter"})`}
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                      </Button>
+
+                      <div className="w-px h-4 bg-white/10" />
 
                       {/* Fullscreen Toggle */}
                       <Button

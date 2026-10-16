@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Monitor, Tv, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { syncEmulatorJSControls, loadPlayerKeyboardMapping } from "@/lib/gamepadMapping";
+import {
+  syncEmulatorJSControls,
+  loadPlayerKeyboardMapping,
+  getInternalEmulatorKeyCode,
+} from "@/lib/gamepadMapping";
 
 export interface EmulatorProps {
   romUrl: string;
@@ -345,65 +349,16 @@ export function Emulator({
       window.EJS_defaultOptions = {};
     }
 
-    // Configure conflict-free default mappings aligned with RetroPad indices (0: B, 1: A, 8: C, 9: Y, 10: X, 11: Z)
-    window.EJS_defaultControls = {
-      0: { // Player 1
-        0: { value: "x" },          // B
-        1: { value: "z" },          // A
-        2: { value: " " },          // MODE
-        3: { value: "enter" },      // START
-        4: { value: "up arrow" },   // DPAD_UP
-        5: { value: "down arrow" }, // DPAD_DOWN
-        6: { value: "left arrow" }, // DPAD_LEFT
-        7: { value: "right arrow" },// DPAD_RIGHT
-        8: { value: "c" },          // C
-        9: { value: "s" },          // Y
-        10: { value: "a" },         // X
-        11: { value: "d" },         // Z
-      },
-      1: { // Player 2
-        0: { value: "o" },          // B
-        1: { value: "u" },          // A
-        2: { value: "-" },          // MODE
-        3: { value: "0" },          // START
-        4: { value: "i" },          // DPAD_UP
-        5: { value: "k" },          // DPAD_DOWN
-        6: { value: "j" },          // DPAD_LEFT
-        7: { value: "l" },          // DPAD_RIGHT
-        8: { value: "p" },          // C
-        9: { value: "8" },          // Y
-        10: { value: "7" },         // X
-        11: { value: "9" },         // Z
-      },
-      2: { // Player 3
-        0: { value: "b" },          // B
-        1: { value: "v" },          // A
-        2: { value: "2" },          // MODE
-        3: { value: "1" },          // START
-        4: { value: "t" },          // DPAD_UP
-        5: { value: "g" },          // DPAD_DOWN
-        6: { value: "f" },          // DPAD_LEFT
-        7: { value: "h" },          // DPAD_RIGHT
-        8: { value: "n" },          // C
-        9: { value: "5" },          // Y
-        10: { value: "4" },         // X
-        11: { value: "6" },         // Z
-      },
-      3: { // Player 4
-        0: { value: "3" },          // B
-        1: { value: "1" },          // A
-        2: { value: "." },          // MODE
-        3: { value: "enter" },      // START
-        4: { value: "8" },          // DPAD_UP
-        5: { value: "2" },          // DPAD_DOWN
-        6: { value: "4" },          // DPAD_LEFT
-        7: { value: "6" },          // DPAD_RIGHT
-        8: { value: "5" },          // C
-        9: { value: "9" },          // Y
-        10: { value: "7" },         // X
-        11: { value: "+" },         // Z
-      },
-    };
+    // Initialize all 4 ports (0..3) across RetroPad buttons (0..23) with isolated internal virtual keycodes (1000..1329).
+    // Physical keyCodes are <= 255; this eliminates cross-player interference and prevents raw keyboard typing from triggering controls!
+    const defaultControls: Record<number, Record<number, { value: number }>> = {};
+    for (let port = 0; port < 4; port++) {
+      defaultControls[port] = {};
+      for (let btnId = 0; btnId <= 23; btnId++) {
+        defaultControls[port][btnId] = { value: getInternalEmulatorKeyCode(port, btnId) };
+      }
+    }
+    window.EJS_defaultControls = defaultControls;
 
     let audioPollId: ReturnType<typeof setInterval> | null = null;
     let audioPollTimeoutId: ReturnType<typeof setTimeout> | null = null;

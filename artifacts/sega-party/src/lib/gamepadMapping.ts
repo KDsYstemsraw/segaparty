@@ -286,11 +286,27 @@ export const PLAYER_KEY_MAPPINGS: Record<number, Record<string, GameAction>> = {
   },
 };
 
-export function getPlayerActionKey(playerIndex: number, actionName: string): GameAction | null {
+/**
+ * Generates an isolated internal virtual keyCode for EmulatorJS ports (0..3) and RetroPad button IDs (0..29).
+ * Physical keyboard keyCodes are <= 255. By mapping EmulatorJS ports 0..3 to keyCodes 1000..1329:
+ * 1) No physical key or typed character (e.g. WASD, chat text, 1/2/3) can ever directly match controls[i][j].value === e.keyCode.
+ * 2) All 4 players can use the exact same keyboard bindings (e.g. WASD or Arrow keys) with zero cross-player interference.
+ */
+export function getInternalEmulatorKeyCode(port: number, btnId: number): number {
+  const safePort = Math.max(0, Math.min(3, Math.floor(Number(port) || 0)));
+  const safeBtn = Math.max(0, Math.min(29, Math.floor(Number(btnId) || 0)));
+  return 1000 + safePort * 100 + safeBtn;
+}
+
+export function getPlayerActionKey(
+  playerIndex: number,
+  actionName: string,
+  core?: string,
+): GameAction | null {
   const slot = Math.max(1, Math.min(4, Math.floor(Number(playerIndex) || 1)));
-  const slotMap = PLAYER_KEY_MAPPINGS[slot] || PLAYER_KEY_MAPPINGS[1];
+  const port = slot - 1;
+  const actionMap = getCoreActionToButtonId(core || getRomCore() || "segaMD");
   const normAction = (actionName || "").toLowerCase().trim();
-  if (slotMap[normAction]) return slotMap[normAction];
 
   // Map non-Genesis or cross-console action aliases to sensible defaults
   const CONSOLE_ALIASES: Record<string, string> = {
@@ -304,6 +320,28 @@ export function getPlayerActionKey(playerIndex: number, actionName: string): Gam
     l2: "z",
     r2: "c",
   };
+
+  let btnId = actionMap[normAction];
+  if (btnId === undefined) {
+    const alias = CONSOLE_ALIASES[normAction];
+    if (alias && actionMap[alias] !== undefined) {
+      btnId = actionMap[alias];
+    }
+  }
+
+  if (btnId !== undefined) {
+    const vKeyCode = getInternalEmulatorKeyCode(port, btnId);
+    const vCode = `EJS_P${slot}_BTN_${btnId}`;
+    return {
+      key: vCode,
+      keyCode: vKeyCode,
+      code: vCode,
+      label: normAction,
+    };
+  }
+
+  const slotMap = PLAYER_KEY_MAPPINGS[slot] || PLAYER_KEY_MAPPINGS[1];
+  if (slotMap[normAction]) return slotMap[normAction];
   const alias = CONSOLE_ALIASES[normAction];
   if (alias && slotMap[alias]) {
     return slotMap[alias];
@@ -361,7 +399,7 @@ export const DEFAULT_KEYBOARD_MAPPING: KeyboardMapping = {
   l2: "1",
   r2: "3",
   select: "Shift",
-  start: "Enter",
+  start: "Backspace",
   mode: " ",
 };
 
@@ -383,25 +421,65 @@ export const WASD_KEYBOARD_MAPPING: KeyboardMapping = {
   l2: "1",
   r2: "3",
   select: "Shift",
-  start: "Enter",
+  start: "Backspace",
   mode: "Shift",
 };
 
+export const CHAT_HOTKEY_STORAGE_KEY = "retroparty-chat-hotkey";
+
+export function loadChatHotkey(playerSlot?: number): string {
+  if (typeof window === "undefined") return "Enter";
+  try {
+    const slotKey = playerSlot ? `${CHAT_HOTKEY_STORAGE_KEY}-p${playerSlot}` : null;
+    const stored =
+      (slotKey ? localStorage.getItem(slotKey) : null) ||
+      localStorage.getItem(CHAT_HOTKEY_STORAGE_KEY);
+    return stored || "Enter";
+  } catch {
+    return "Enter";
+  }
+}
+
+export function saveChatHotkey(key: string, playerSlot?: number): void {
+  if (typeof window === "undefined") return;
+  const safeKey = key || "Enter";
+  try {
+    if (playerSlot) {
+      localStorage.setItem(`${CHAT_HOTKEY_STORAGE_KEY}-p${playerSlot}`, safeKey);
+    }
+    localStorage.setItem(CHAT_HOTKEY_STORAGE_KEY, safeKey);
+  } catch {}
+
+  window.dispatchEvent(
+    new CustomEvent("chat-hotkey-changed", {
+      detail: { key: safeKey, playerSlot },
+    }),
+  );
+}
+
 export function loadPlayerKeyboardMapping(playerSlot: number): KeyboardMapping {
   const slot = Math.max(1, Math.min(4, Math.floor(Number(playerSlot) || 1)));
-  const defaultMapping = slot === 2 ? WASD_KEYBOARD_MAPPING : DEFAULT_KEYBOARD_MAPPING;
+  const defaultMapping = DEFAULT_KEYBOARD_MAPPING;
   try {
     const key = getPlayerKeyboardStorageKey(slot);
     const stored = localStorage.getItem(key);
+    let mapping: KeyboardMapping | null = null;
     if (stored) {
-      return { ...defaultMapping, ...JSON.parse(stored) };
-    }
-    // Check legacy storage key for slot 1
-    if (slot === 1) {
+      mapping = { ...defaultMapping, ...JSON.parse(stored) };
+    } else if (slot === 1) {
       const legacy = localStorage.getItem(KEYBOARD_STORAGE_KEY);
       if (legacy) {
-        return { ...defaultMapping, ...JSON.parse(legacy) };
+        mapping = { ...defaultMapping, ...JSON.parse(legacy) };
       }
+    }
+    if (mapping) {
+      // If stored mapping still had start: "Enter" but chat hotkey is also "Enter",
+      // migrate start to "Backspace" to prevent chat hotkey conflict
+      const chatHotkey = loadChatHotkey(slot);
+      if (mapping.start?.toLowerCase() === "enter" && chatHotkey.toLowerCase() === "enter") {
+        mapping.start = "Backspace";
+      }
+      return mapping;
     }
   } catch {}
   return { ...defaultMapping };
@@ -936,42 +1014,42 @@ export function keyNameToKeyCode(key: string): number {
 }
 
 /**
- * Synchronizes a player's keyboard mapping into EmulatorJS native controls structure.
- * EmulatorJS checks `this.controls[port][btnId].value === e.keyCode`.
+ * Synchronizes EmulatorJS native controls structure by locking all 4 ports (0..3)
+ * to predefined non-overlapping internal virtual keycodes (1000..1329) for RetroPad button indices (0..23),
+ * and clearing special indices (24..29: save/load state, fast-forward, rewind) to eliminate interference.
  */
 export function syncEmulatorJSControls(
-  playerSlot: number,
-  mapping: KeyboardMapping,
-  core?: string,
+  _playerSlot?: number,
+  _mapping?: KeyboardMapping,
+  _core?: string,
 ): void {
   if (typeof window === "undefined") return;
-  const port = Math.max(0, Math.min(3, (Number(playerSlot) || 1) - 1));
-  const actionMap = getCoreActionToButtonId(core || getRomCore() || "segaMD");
   const win = window as unknown as {
     EJS_emulator?: {
       controls?: Record<number, Record<number, { value?: number | string }>>;
     };
   };
-
   const ejsControls = win.EJS_emulator?.controls;
-  if (!ejsControls || !ejsControls[port]) return;
+  if (!ejsControls) return;
 
-  for (const [action, key] of Object.entries(mapping)) {
-    if (isMouseBinding(key)) continue;
-    const btnId = actionMap[action.toLowerCase()];
-    if (btnId !== undefined && key) {
-      const code = keyNameToKeyCode(key);
-      if (!ejsControls[port][btnId]) {
-        ejsControls[port][btnId] = {};
+  for (let p = 0; p < 4; p++) {
+    if (!ejsControls[p]) ejsControls[p] = {};
+    for (let b = 0; b <= 23; b++) {
+      if (!ejsControls[p][b]) ejsControls[p][b] = {};
+      ejsControls[p][b].value = getInternalEmulatorKeyCode(p, b);
+    }
+    // Clear special EmulatorJS hotkeys (24..29: Save/Load State, Fast Forward, Rewind)
+    for (let special = 24; special <= 29; special++) {
+      if (ejsControls[p][special]) {
+        delete ejsControls[p][special].value;
       }
-      ejsControls[port][btnId].value = code;
     }
   }
 }
 
 /**
  * Simulates controller input into EmulatorJS directly via the C-core GameManager,
- * falling back to synthetic KeyboardEvents if the C-core is not ready.
+ * falling back to synthetic KeyboardEvents with isolated internal keycodes if the C-core is not ready.
  * Dual-routes directionals to both D-Pad and Left Analog Stick for PSX/N64.
  * Returns true when direct C-core input succeeded, or false when it fell back to KeyboardEvent.
  */
@@ -1060,7 +1138,7 @@ export function simulateEmulatorInput(
   }
 
   // Fallback: dispatch KeyboardEvent using player's assigned key mapping or synthesized key
-  let keyAction = getPlayerActionKey(playerIndex, normAction);
+  let keyAction = getPlayerActionKey(playerIndex, normAction, activeCore);
   if (!keyAction) {
     try {
       const userMapping = loadPlayerKeyboardMapping(playerIndex);
@@ -1085,22 +1163,26 @@ export function simulateEmulatorInput(
     };
   }
 
-  const numericKeyCode = keyNameToKeyCode(keyAction.key) || keyAction.keyCode || 0;
+  const internalKeyCode =
+    btnId !== undefined
+      ? getInternalEmulatorKeyCode(port, btnId)
+      : (keyNameToKeyCode(keyAction.key) || keyAction.keyCode || 0);
 
   const target = win.EJS_emulator?.elements?.parent || document.getElementById("game") || window;
   const eventType = isDown ? "keydown" : "keyup";
   const event = new KeyboardEvent(eventType, {
     key: keyAction.key,
     code: keyAction.code,
-    keyCode: numericKeyCode,
-    which: numericKeyCode,
+    keyCode: internalKeyCode,
+    which: internalKeyCode,
     bubbles: true,
     cancelable: true,
   });
 
   try {
-    Object.defineProperty(event, "keyCode", { get: () => numericKeyCode });
-    Object.defineProperty(event, "which", { get: () => numericKeyCode });
+    Object.defineProperty(event, "keyCode", { get: () => internalKeyCode });
+    Object.defineProperty(event, "which", { get: () => internalKeyCode });
+    Object.defineProperty(event, "__isInternalEmulatorKey", { value: true });
   } catch {}
 
   target.dispatchEvent(event);
