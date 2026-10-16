@@ -15,7 +15,7 @@ import {
   type ChatMessage,
   type ParticipantInfo,
 } from "@/lib/webrtc";
-import { getPlayerActionKey, simulateEmulatorInput } from "@/lib/gamepadMapping";
+import { getPlayerActionKey, simulateEmulatorInput, loadKeyboardMapping } from "@/lib/gamepadMapping";
 import { useGamepad } from "@/hooks/useGamepad";
 
 import { ControlsModal } from "@/components/ControlsModal";
@@ -48,6 +48,7 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { Skeleton } from "@/components/ui/skeleton";
 
 
@@ -122,6 +123,13 @@ export default function SessionPage() {
   const [activeRomName, setActiveRomName] = useState<string | null>(getRomName());
   const [currentRomUrl, setCurrentRomUrl] = useState<string | null>(() => getRomUrl());
   const [activeButtons, setActiveButtons] = useState<Set<string>>(new Set());
+  const [keyboardMapping, setKeyboardMapping] = useState(() => loadKeyboardMapping());
+
+  useEffect(() => {
+    const update = () => setKeyboardMapping(loadKeyboardMapping());
+    window.addEventListener("keyboard-mapping-changed", update);
+    return () => window.removeEventListener("keyboard-mapping-changed", update);
+  }, []);
 
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -510,6 +518,96 @@ export default function SessionPage() {
     [isHost, sendSignal],
   );
 
+  // Claim Controller Slot
+  const handleClaimSlot = useCallback(
+    (slotNumber: number) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "slot-claim",
+            sessionCode: code,
+            slot: slotNumber,
+            peerId: myPeerId.current,
+            playerName: myPlayerName,
+          }),
+        );
+      }
+    },
+    [code, myPlayerName],
+  );
+
+  // Release Controller Slot
+  const handleReleaseSlot = useCallback(
+    (slotNumber?: number) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "slot-release",
+            sessionCode: code,
+            slot: slotNumber,
+            peerId: myPeerId.current,
+            playerName: myPlayerName,
+          }),
+        );
+      }
+    },
+    [code, myPlayerName],
+  );
+
+  // Pass Controller Slot to another peer
+  const handlePassSlot = useCallback(
+    (slot: number, targetPeerId: string, targetPlayerName: string) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "slot-pass",
+            sessionCode: code,
+            slot,
+            targetPeerId,
+            targetPlayerName,
+          }),
+        );
+      }
+    },
+    [code],
+  );
+
+  // Kick Controller Slot to Spectator
+  const handleKickSlot = useCallback(
+    (slot: number) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "slot-kick",
+            sessionCode: code,
+            slot,
+          }),
+        );
+      }
+    },
+    [code],
+  );
+
+  // Request Controller Slot
+  const handleRequestSlot = useCallback(
+    (slot: number) => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "slot-request",
+            sessionCode: code,
+            slot,
+          }),
+        );
+        toast({
+          title: "Request Sent",
+          description: `Requested Player ${slot} controller.`,
+        });
+      }
+    },
+    [code, toast],
+  );
+
   // WebSocket signaling connection
   useEffect(() => {
     if (!session || !myPlayerName) return;
@@ -553,6 +651,28 @@ export default function SessionPage() {
 
         if (msg.type === "slot-state") {
           if (msg.slots) setSlots(msg.slots as SlotState);
+        }
+
+        if (msg.type === "slot-request") {
+          const slot = Number(msg.slot);
+          const fromPeerId = msg.fromPeerId as string;
+          const fromPlayerName = msg.fromPlayerName as string;
+          const isSlotOwner = slotAssignmentsRef.current[slot]?.peerId === myPeerId.current;
+          if (isSlotOwner || isHostRef.current) {
+            toast({
+              title: "Controller Requested",
+              description: `${fromPlayerName} requested Player ${slot} controller.`,
+              action: (
+                <ToastAction
+                  altText="Pass Controller"
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 text-xs font-bold"
+                  onClick={() => handlePassSlot(slot, fromPeerId, fromPlayerName)}
+                >
+                  Pass Controller
+                </ToastAction>
+              ),
+            });
+          }
         }
 
         if (msg.type === "participant-joined") {
@@ -870,41 +990,7 @@ export default function SessionPage() {
     [code, isHost],
   );
 
-  // Claim Controller Slot
-  const handleClaimSlot = useCallback(
-    (slotNumber: number) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: "slot-claim",
-            sessionCode: code,
-            slot: slotNumber,
-            peerId: myPeerId.current,
-            playerName: myPlayerName,
-          }),
-        );
-      }
-    },
-    [code, myPlayerName],
-  );
 
-  // Release Controller Slot
-  const handleReleaseSlot = useCallback(
-    (slotNumber?: number) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: "slot-release",
-            sessionCode: code,
-            slot: slotNumber,
-            peerId: myPeerId.current,
-            playerName: myPlayerName,
-          }),
-        );
-      }
-    },
-    [code, myPlayerName],
-  );
 
 
   // Send Text Chat Message
@@ -972,11 +1058,23 @@ export default function SessionPage() {
       "-": "mode",
     };
 
-    const actionMap = !isHost
+    // Invert user's configured keyboardMapping
+    const keyToGenesisAction: Record<string, string> = {};
+    for (const [action, key] of Object.entries(keyboardMapping)) {
+      keyToGenesisAction[key] = action;
+      if (key.length === 1) {
+        keyToGenesisAction[key.toLowerCase()] = action;
+        keyToGenesisAction[key.toUpperCase()] = action;
+      }
+    }
+
+    const defaultActionMap = !isHost
       ? { ...KEY_ACTIONS_P2, ...KEY_ACTIONS_P1 }
       : activeSlot === 2
       ? KEY_ACTIONS_P2
       : KEY_ACTIONS_P1;
+
+    const actionMap = { ...defaultActionMap, ...keyToGenesisAction };
 
     const forwardKey = (e: KeyboardEvent, type: "keydown" | "keyup") => {
       // Ignore synthetic events dispatched by handleInputEvent to prevent infinite loop
@@ -992,7 +1090,7 @@ export default function SessionPage() {
             (activeEl as HTMLInputElement).type !== "checkbox"));
       if (isTextEntry) return;
 
-      const action = actionMap[e.key];
+      const action = keyToGenesisAction[e.key] || actionMap[e.key];
       if (!action) return;
 
       e.preventDefault();
@@ -1020,7 +1118,7 @@ export default function SessionPage() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [effectiveSlot, isHost, handleInputEvent, handleButtonActivity]);
+  }, [effectiveSlot, isHost, keyboardMapping, handleInputEvent, handleButtonActivity]);
 
 
   const handleLoadRomFile = async (file: File) => {
@@ -1430,8 +1528,12 @@ export default function SessionPage() {
             isHost={isHost}
             mySlot={mySlot}
             activeButtons={activeButtons}
+            participants={participants}
             onClaimSlot={handleClaimSlot}
             onReleaseSlot={handleReleaseSlot}
+            onPassSlot={handlePassSlot}
+            onKickSlot={handleKickSlot}
+            onRequestSlot={handleRequestSlot}
           />
 
           {/* Mobile Touch Controller (if toggled) */}

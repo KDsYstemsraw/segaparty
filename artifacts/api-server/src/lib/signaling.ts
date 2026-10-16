@@ -385,6 +385,117 @@ export function attachSignalingServer(server: Server) {
         return;
       }
 
+      if (type === "slot-pass") {
+        const sessionCode = (msg.sessionCode as string)?.toUpperCase();
+        const slot = Number(msg.slot);
+        const targetPeerId = msg.targetPeerId as string;
+        const targetPlayerName = (msg.targetPlayerName as string) || "Player";
+
+        if (!sessionCode || !slot || slot < 1 || slot > 4 || !targetPeerId) return;
+
+        const room = rooms.get(sessionCode);
+        if (!room) return;
+
+        cleanupStaleSlots(room);
+
+        // Verify permission: host OR current occupant of this slot
+        if (myPeerId !== room.hostPeerId && room.slots[slot]?.peerId !== myPeerId) return;
+
+        // Clear any other slot targetPeerId held previously
+        for (let i = 1; i <= 4; i++) {
+          if (i !== slot && room.slots[i]?.peerId === targetPeerId) {
+            room.slots[i] = null;
+          }
+        }
+
+        room.slots[slot] = {
+          peerId: targetPeerId,
+          playerName: targetPlayerName,
+          isHost: targetPeerId === room.hostPeerId,
+        };
+
+        broadcastToRoom(room, {
+          type: "slot-state",
+          slots: room.slots,
+        });
+
+        broadcastToRoom(room, {
+          type: "chat",
+          id: crypto.randomUUID(),
+          senderId: "system",
+          senderName: "SYSTEM",
+          text: `🎮 ${myPlayerName} passed Player ${slot} controller to ${targetPlayerName}`,
+          timestamp: Date.now(),
+          isSystem: true,
+        });
+
+        return;
+      }
+
+      if (type === "slot-kick") {
+        const sessionCode = (msg.sessionCode as string)?.toUpperCase();
+        const slot = Number(msg.slot);
+
+        if (!sessionCode || !slot || slot < 1 || slot > 4) return;
+
+        const room = rooms.get(sessionCode);
+        if (!room) return;
+
+        cleanupStaleSlots(room);
+
+        // Verify permission: only host
+        if (myPeerId !== room.hostPeerId) return;
+
+        const previousName = room.slots[slot]?.playerName || `Player ${slot}`;
+        room.slots[slot] = null;
+
+        broadcastToRoom(room, {
+          type: "slot-state",
+          slots: room.slots,
+        });
+
+        broadcastToRoom(room, {
+          type: "chat",
+          id: crypto.randomUUID(),
+          senderId: "system",
+          senderName: "SYSTEM",
+          text: `👑 Host released Player ${slot} controller (${previousName} is now spectating)`,
+          timestamp: Date.now(),
+          isSystem: true,
+        });
+
+        return;
+      }
+
+      if (type === "slot-request") {
+        const sessionCode = (msg.sessionCode as string)?.toUpperCase();
+        const slot = Number(msg.slot);
+
+        if (!sessionCode || !slot || slot < 1 || slot > 4) return;
+
+        const room = rooms.get(sessionCode);
+        if (!room) return;
+
+        broadcastToRoom(room, {
+          type: "slot-request",
+          fromPeerId: myPeerId,
+          fromPlayerName: myPlayerName,
+          slot,
+        });
+
+        broadcastToRoom(room, {
+          type: "chat",
+          id: crypto.randomUUID(),
+          senderId: "system",
+          senderName: "SYSTEM",
+          text: `✋ ${myPlayerName} requested Player ${slot} controller`,
+          timestamp: Date.now(),
+          isSystem: true,
+        });
+
+        return;
+      }
+
 
       if (type === "chat") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();

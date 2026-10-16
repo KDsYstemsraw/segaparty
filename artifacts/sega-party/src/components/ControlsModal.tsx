@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Gamepad2, RotateCcw, Circle, Keyboard, Tv } from "lucide-react";
+import { Gamepad2, RotateCcw, Circle, Keyboard } from "lucide-react";
 import {
   GAME_ACTIONS,
   DEFAULT_MAPPING,
@@ -11,6 +11,12 @@ import {
   saveMapping,
   buttonLabel,
   type GamepadMapping,
+  type KeyboardMapping,
+  DEFAULT_KEYBOARD_MAPPING,
+  WASD_KEYBOARD_MAPPING,
+  loadKeyboardMapping,
+  saveKeyboardMapping,
+  formatKeyLabel,
 } from "@/lib/gamepadMapping";
 
 interface ControlsModalProps {
@@ -27,6 +33,11 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
   const [lastPressedButton, setLastPressedButton] = useState<string | null>(null);
   const listenTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rafRef = useRef<number>(0);
+
+  // Keyboard rebinding state
+  const [kbMapping, setKbMapping] = useState<KeyboardMapping>(() => loadKeyboardMapping());
+  const [listeningKeyFor, setListeningKeyFor] = useState<string | null>(null);
+  const [lastPressedKey, setLastPressedKey] = useState<string | null>(null);
 
   // Detect connected gamepad
   useEffect(() => {
@@ -82,6 +93,41 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
     return () => cancelAnimationFrame(rafRef.current);
   }, [open, listeningFor, mapping]);
 
+  // Keyboard rebinding keydown listener
+  useEffect(() => {
+    if (!listeningKeyFor) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setListeningKeyFor(null);
+        return;
+      }
+      const newKey = e.key;
+      setLastPressedKey(formatKeyLabel(newKey));
+      const updated = { ...kbMapping, [listeningKeyFor]: newKey };
+      setKbMapping(updated);
+      saveKeyboardMapping(updated);
+      setListeningKeyFor(null);
+    };
+
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [listeningKeyFor, kbMapping]);
+
+  // Passive keyboard tester listener when modal is open
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyTest = (e: KeyboardEvent) => {
+      if (listeningKeyFor) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      setLastPressedKey(formatKeyLabel(e.key));
+    };
+    window.addEventListener("keydown", handleKeyTest);
+    return () => window.removeEventListener("keydown", handleKeyTest);
+  }, [open, listeningKeyFor]);
+
   const startListening = (actionName: string) => {
     setListeningFor(actionName);
     if (listenTimeout.current) clearTimeout(listenTimeout.current);
@@ -94,6 +140,12 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
     window.dispatchEvent(new Event("gamepad-mapping-changed"));
   };
 
+  const applyKeyboardPreset = (preset: KeyboardMapping) => {
+    const updated = { ...preset };
+    setKbMapping(updated);
+    saveKeyboardMapping(updated);
+  };
+
   const actionToButton = (actionName: string): string => {
     const entry = Object.entries(mapping).find(([k, v]) => v === actionName && !k.startsWith("axis"));
     if (!entry) return "—";
@@ -101,7 +153,16 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) { setListeningFor(null); onClose(); } }}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) {
+          setListeningFor(null);
+          setListeningKeyFor(null);
+          onClose();
+        }
+      }}
+    >
       <DialogContent className="max-w-xl bg-card border-primary/50 font-sans shadow-2xl">
         <DialogHeader>
           <DialogTitle className="font-display text-primary flex items-center gap-2 text-xl">
@@ -155,7 +216,7 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
                     onClick={() => startListening(actionName)}
                     className={`flex items-center justify-between px-3 py-2 border text-left transition-all rounded-md ${
                       isListening
-                        ? "border-accent bg-accent/15 animate-pulse"
+                        ? "border-accent bg-accent/15 animate-pulse ring-1 ring-accent"
                         : "border-border bg-background/80 hover:border-primary/50 hover:bg-primary/5"
                     }`}
                   >
@@ -181,7 +242,12 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
               </Button>
               <Button
                 size="sm"
-                onClick={() => { setListeningFor(null); onClose(); }}
+                onClick={() => {
+                  saveMapping(mapping);
+                  window.dispatchEvent(new Event("gamepad-mapping-changed"));
+                  setListeningFor(null);
+                  onClose();
+                }}
                 className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold text-xs px-5 h-8"
               >
                 Save
@@ -189,42 +255,100 @@ export function ControlsModal({ open, onClose }: ControlsModalProps) {
             </div>
           </TabsContent>
 
-          {/* Keyboard reference tab */}
+          {/* Keyboard rebinding tab */}
           <TabsContent value="keyboard" className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Keyboard mappings when playing without a gamepad:
-            </p>
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="p-3 bg-blue-950/20 border border-blue-500/40 rounded-lg space-y-1.5">
-                <div className="font-display font-bold text-blue-400 text-sm">Player 1 Controls</div>
-                <div className="font-mono text-[11px] space-y-1 text-muted-foreground">
-                  <div>• D-Pad: <span className="text-foreground font-bold">Arrow Keys</span></div>
-                  <div>• A / B / C: <span className="text-foreground font-bold">Z / X / C</span></div>
-                  <div>• X / Y / Z: <span className="text-foreground font-bold">A / S / D</span></div>
-                  <div>• Start: <span className="text-foreground font-bold">Enter</span></div>
-                  <div>• Mode: <span className="text-foreground font-bold">Space</span></div>
-                </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-muted-foreground text-[11px] font-semibold">Presets:</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => applyKeyboardPreset(DEFAULT_KEYBOARD_MAPPING)}
+                  className="h-7 px-2.5 text-[11px] font-medium border-border/80 hover:border-primary/50"
+                >
+                  Retro Default (Arrows)
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => applyKeyboardPreset(WASD_KEYBOARD_MAPPING)}
+                  className="h-7 px-2.5 text-[11px] font-medium border-border/80 hover:border-primary/50"
+                >
+                  WASD + JKL
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => applyKeyboardPreset(DEFAULT_KEYBOARD_MAPPING)}
+                  className="h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground gap-1"
+                >
+                  <RotateCcw className="w-3 h-3" /> Reset Defaults
+                </Button>
               </div>
-
-              <div className="p-3 bg-red-950/20 border border-red-500/40 rounded-lg space-y-1.5">
-                <div className="font-display font-bold text-red-400 text-sm">Player 2 Controls</div>
-                <div className="font-mono text-[11px] space-y-1 text-muted-foreground">
-                  <div>• D-Pad: <span className="text-foreground font-bold">I / K / J / L</span></div>
-                  <div>• A / B / C: <span className="text-foreground font-bold">U / O / P</span></div>
-                  <div>• X / Y / Z: <span className="text-foreground font-bold">7 / 8 / 9</span></div>
-                  <div>• Start: <span className="text-foreground font-bold">0 (Zero)</span></div>
-                  <div>• Mode: <span className="text-foreground font-bold">- (Minus)</span></div>
-                </div>
-              </div>
+              {lastPressedKey && (
+                <span className="text-[10px] text-muted-foreground font-mono">
+                  Last pressed key: <span className="text-accent font-bold">{lastPressedKey}</span>
+                </span>
+              )}
             </div>
 
-            <div className="flex justify-end pt-2 border-t border-border/60">
+            <p className="text-xs text-muted-foreground">
+              Click any button to rebind. Press Escape to cancel.
+            </p>
+
+            <div className="grid grid-cols-2 gap-1.5 max-h-60 overflow-y-auto pr-1">
+              {ACTION_ORDER.map((actionName) => {
+                const action = GAME_ACTIONS[actionName];
+                const isListening = listeningKeyFor === actionName;
+                const boundKey = kbMapping[actionName] || "";
+                const keyDisplay = isListening ? "Press any key..." : formatKeyLabel(boundKey);
+                return (
+                  <button
+                    key={actionName}
+                    onClick={() => setListeningKeyFor(actionName)}
+                    className={`flex items-center justify-between px-3 py-2 border text-left transition-all rounded-md ${
+                      isListening
+                        ? "border-accent bg-accent/20 animate-pulse ring-1 ring-accent"
+                        : "border-border bg-background/80 hover:border-primary/50 hover:bg-primary/5"
+                    }`}
+                  >
+                    <span className="text-xs font-bold text-foreground uppercase tracking-wide">
+                      {action?.label || actionName}
+                    </span>
+                    <span
+                      className={`text-xs font-mono font-bold ${
+                        isListening ? "text-accent animate-bounce" : "text-muted-foreground"
+                      }`}
+                    >
+                      {keyDisplay}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="p-2.5 bg-muted/40 border border-border/50 rounded-md text-[11px] text-muted-foreground">
+              Player 2 guest keyboard fallback: <span className="font-mono text-foreground font-semibold">I/K/J/L</span> (D-Pad), <span className="font-mono text-foreground font-semibold">U/O/P</span> (A/B/C), <span className="font-mono text-foreground font-semibold">0</span> (Start)
+            </div>
+
+            <div className="flex justify-between items-center pt-2 border-t border-border/60">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => applyKeyboardPreset(DEFAULT_KEYBOARD_MAPPING)}
+                className="text-muted-foreground hover:text-foreground gap-1.5 text-xs h-8"
+              >
+                <RotateCcw className="w-3 h-3" /> Reset Defaults
+              </Button>
               <Button
                 size="sm"
-                onClick={onClose}
+                onClick={() => {
+                  setListeningKeyFor(null);
+                  onClose();
+                }}
                 className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold text-xs px-5 h-8"
               >
-                Close
+                Done
               </Button>
             </div>
           </TabsContent>

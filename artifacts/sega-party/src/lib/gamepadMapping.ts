@@ -138,6 +138,71 @@ export function loadMapping(): GamepadMapping {
 
 export function saveMapping(mapping: GamepadMapping): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(mapping));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("gamepad-mapping-changed"));
+  }
+}
+
+export type KeyboardMapping = Record<string, string>; // actionName -> keyName (e.g. up -> ArrowUp, a -> z)
+
+export const DEFAULT_KEYBOARD_MAPPING: KeyboardMapping = {
+  up: "ArrowUp",
+  down: "ArrowDown",
+  left: "ArrowLeft",
+  right: "ArrowRight",
+  a: "z",
+  b: "x",
+  c: "c",
+  x: "a",
+  y: "s",
+  z: "d",
+  start: "Enter",
+  mode: " ",
+};
+
+export const WASD_KEYBOARD_MAPPING: KeyboardMapping = {
+  up: "w",
+  down: "s",
+  left: "a",
+  right: "d",
+  a: "j",
+  b: "k",
+  c: "l",
+  x: "u",
+  y: "i",
+  z: "o",
+  start: "Enter",
+  mode: "Shift",
+};
+
+const KEYBOARD_STORAGE_KEY = "sega-party-keyboard-mapping";
+
+export function loadKeyboardMapping(): KeyboardMapping {
+  try {
+    const stored = localStorage.getItem(KEYBOARD_STORAGE_KEY);
+    if (stored) return { ...DEFAULT_KEYBOARD_MAPPING, ...JSON.parse(stored) };
+  } catch {}
+  return { ...DEFAULT_KEYBOARD_MAPPING };
+}
+
+export function saveKeyboardMapping(mapping: KeyboardMapping): void {
+  localStorage.setItem(KEYBOARD_STORAGE_KEY, JSON.stringify(mapping));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("keyboard-mapping-changed"));
+  }
+}
+
+export function formatKeyLabel(key: string): string {
+  if (!key) return "—";
+  if (key === " ") return "Space";
+  if (key === "ArrowUp") return "▲ Up Arrow";
+  if (key === "ArrowDown") return "▼ Down Arrow";
+  if (key === "ArrowLeft") return "◀ Left Arrow";
+  if (key === "ArrowRight") return "▶ Right Arrow";
+  if (key === "Enter") return "Enter";
+  if (key === "Shift") return "Shift";
+  if (key.length === 1) return key.toUpperCase();
+  return key;
 }
 
 export function buttonLabel(buttonIndex: number): string {

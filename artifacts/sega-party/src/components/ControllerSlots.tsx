@@ -1,9 +1,20 @@
-﻿import React from "react";
-import { Gamepad2, Users, Crown, ShieldAlert, Sparkles } from "lucide-react";
+import React from "react";
+import { Gamepad2, Users, Crown, ShieldAlert, Sparkles, Send, UserX, Hand, MoreVertical } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import type { SlotState } from "@/lib/webrtc";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { SlotState, ParticipantInfo } from "@/lib/webrtc";
 
 interface ControllerSlotsProps {
   slots: SlotState;
@@ -11,8 +22,12 @@ interface ControllerSlotsProps {
   isHost: boolean;
   mySlot: number | null;
   activeButtons: Set<string>;
+  participants: ParticipantInfo[];
   onClaimSlot: (slot: number) => void;
   onReleaseSlot: (slot?: number) => void;
+  onPassSlot?: (slot: number, targetPeerId: string, targetPlayerName: string) => void;
+  onKickSlot?: (slot: number) => void;
+  onRequestSlot?: (slot: number) => void;
 }
 
 const SLOT_CONFIGS: Record<number, { name: string; color: string; border: string; bg: string; glow: string }> = {
@@ -66,9 +81,17 @@ export function ControllerSlots({
   isHost,
   mySlot,
   activeButtons,
+  participants,
   onClaimSlot,
   onReleaseSlot,
+  onPassSlot,
+  onKickSlot,
+  onRequestSlot,
 }: ControllerSlotsProps) {
+  const eligibleSpectators = participants.filter(
+    (p) => !Object.values(slots).some((s) => s?.peerId === p.peerId),
+  );
+
   return (
     <div className="w-full space-y-3">
       <div className="flex items-center justify-between">
@@ -116,25 +139,79 @@ export function ControllerSlots({
                     </span>
                   </div>
 
-                  {isOccupied ? (
-                    holder.isHost ? (
-                      <Badge variant="outline" className="text-[10px] border-primary/50 text-primary py-0 px-1.5 gap-1">
-                        <Crown className="w-2.5 h-2.5" /> Host
-                      </Badge>
-                    ) : isMe ? (
-                      <Badge variant="outline" className="text-[10px] border-accent/50 text-accent py-0 px-1.5 gap-1">
-                        <Sparkles className="w-2.5 h-2.5" /> You
-                      </Badge>
-                    ) : null
-                  ) : (
-                    <span className="text-[10px] font-sans uppercase font-bold text-muted-foreground/60 tracking-wider">
-                      Open
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    {isOccupied ? (
+                      holder.isHost ? (
+                        <Badge variant="outline" className="text-[10px] border-primary/50 text-primary py-0 px-1.5 gap-1">
+                          <Crown className="w-2.5 h-2.5" /> Host
+                        </Badge>
+                      ) : isMe ? (
+                        <Badge variant="outline" className="text-[10px] border-accent/50 text-accent py-0 px-1.5 gap-1">
+                          <Sparkles className="w-2.5 h-2.5" /> You
+                        </Badge>
+                      ) : null
+                    ) : (
+                      <span className="text-[10px] font-sans uppercase font-bold text-muted-foreground/60 tracking-wider">
+                        Open
+                      </span>
+                    )}
+
+                    {/* Host Moderation Popover / Menu on every slot */}
+                    {isHost && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6 text-muted-foreground hover:text-primary p-0"
+                            title={`Host Moderation P${slotNum}`}
+                          >
+                            <MoreVertical className="w-3.5 h-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-52 bg-card border-border">
+                          <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
+                            Host Actions (P{slotNum})
+                          </DropdownMenuLabel>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuSub>
+                            <DropdownMenuSubTrigger className="text-xs cursor-pointer">
+                              <Send className="w-3 h-3 mr-2 text-primary" /> Pass to spectator...
+                            </DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent className="w-48 bg-card border-border">
+                              {eligibleSpectators.length === 0 ? (
+                                <div className="p-2 text-xs text-muted-foreground text-center">
+                                  No spectators available
+                                </div>
+                              ) : (
+                                eligibleSpectators.map((p) => (
+                                  <DropdownMenuItem
+                                    key={p.peerId}
+                                    onClick={() => onPassSlot?.(slotNum, p.peerId, p.playerName)}
+                                    className="cursor-pointer text-xs"
+                                  >
+                                    <span className="font-bold truncate">{p.playerName}</span>
+                                  </DropdownMenuItem>
+                                ))
+                              )}
+                            </DropdownMenuSubContent>
+                          </DropdownMenuSub>
+                          {isOccupied && (
+                            <DropdownMenuItem
+                              onClick={() => onKickSlot?.(slotNum)}
+                              className="cursor-pointer text-xs text-destructive focus:text-destructive flex items-center gap-2"
+                            >
+                              <UserX className="w-3.5 h-3.5" /> Kick to Spectators
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </div>
                 </div>
 
-                {/* Occupant name or Claim button */}
-                <div>
+                {/* Occupant details or Claim / Pass / Request controls */}
+                <div className="space-y-2">
                   {isOccupied ? (
                     <div className="space-y-1">
                       <div className="font-sans font-bold text-sm truncate text-foreground flex items-center gap-1.5">
@@ -156,6 +233,69 @@ export function ControllerSlots({
                     >
                       Grab Player {slotNum}
                     </Button>
+                  )}
+
+                  {/* If isMe: Pass Controller dropdown & Release (Spectate) button */}
+                  {isMe && (
+                    <div className="flex items-center gap-1.5 pt-1">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 h-7 text-xs border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
+                          >
+                            <Send className="w-3 h-3" /> Pass Controller
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="w-48 bg-card border-border">
+                          <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
+                            Pass to Spectator
+                          </DropdownMenuLabel>
+                          <DropdownMenuSeparator />
+                          {eligibleSpectators.length === 0 ? (
+                            <div className="p-2 text-xs text-muted-foreground text-center">
+                              No spectators available
+                            </div>
+                          ) : (
+                            eligibleSpectators.map((p) => (
+                              <DropdownMenuItem
+                                key={p.peerId}
+                                onClick={() => onPassSlot?.(slotNum, p.peerId, p.playerName)}
+                                className="cursor-pointer text-xs flex items-center justify-between"
+                              >
+                                <span className="font-bold truncate">{p.playerName}</span>
+                                <span className="text-[10px] text-muted-foreground font-mono">Give</span>
+                              </DropdownMenuItem>
+                            ))
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onReleaseSlot(slotNum)}
+                        className="h-7 text-xs border-muted-foreground/30 text-muted-foreground hover:text-destructive hover:border-destructive font-sans px-2"
+                        title="Release (Spectate)"
+                      >
+                        <UserX className="w-3 h-3 mr-1" /> Spectate
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* If occupied by someone else, AND !mySlot (current user is spectator): Request Controller button */}
+                  {isOccupied && !isMe && !mySlot && (
+                    <div className="pt-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onRequestSlot?.(slotNum)}
+                        className="w-full h-7 text-xs border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1.5 font-sans"
+                      >
+                        <Hand className="w-3 h-3 text-accent" /> Request Controller
+                      </Button>
+                    </div>
                   )}
                 </div>
 
