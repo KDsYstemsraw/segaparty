@@ -128,22 +128,11 @@ export const DEFAULT_MAPPING: GamepadMapping = {
   "axis-1-pos": "down",
 };
 
-const STORAGE_KEY = "sega-party-gamepad-mapping";
+export const STORAGE_KEY = "sega-party-gamepad-mapping";
+export const KEYBOARD_STORAGE_KEY = "sega-party-keyboard-mapping";
 
-export function loadMapping(): GamepadMapping {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) return { ...DEFAULT_MAPPING, ...JSON.parse(stored) };
-  } catch {}
-  return { ...DEFAULT_MAPPING };
-}
-
-export function saveMapping(mapping: GamepadMapping): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(mapping));
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event("gamepad-mapping-changed"));
-  }
-}
+export const getPlayerKeyboardStorageKey = (slot: number) => `retroparty-controls-p${slot}-keyboard`;
+export const getPlayerGamepadStorageKey = (slot: number) => `retroparty-controls-p${slot}-gamepad`;
 
 export type KeyboardMapping = Record<string, string>; // actionName -> keyName (e.g. up -> ArrowUp, a -> z)
 
@@ -191,21 +180,136 @@ export const WASD_KEYBOARD_MAPPING: KeyboardMapping = {
   mode: "Shift",
 };
 
-const KEYBOARD_STORAGE_KEY = "sega-party-keyboard-mapping";
+export function loadPlayerKeyboardMapping(playerSlot: number): KeyboardMapping {
+  const slot = Math.max(1, Math.min(4, Math.floor(Number(playerSlot) || 1)));
+  const defaultMapping = slot === 2 ? WASD_KEYBOARD_MAPPING : DEFAULT_KEYBOARD_MAPPING;
+  try {
+    const key = getPlayerKeyboardStorageKey(slot);
+    const stored = localStorage.getItem(key);
+    if (stored) {
+      return { ...defaultMapping, ...JSON.parse(stored) };
+    }
+    // Check legacy storage key for slot 1
+    if (slot === 1) {
+      const legacy = localStorage.getItem(KEYBOARD_STORAGE_KEY);
+      if (legacy) {
+        return { ...defaultMapping, ...JSON.parse(legacy) };
+      }
+    }
+  } catch {}
+  return { ...defaultMapping };
+}
+
+export function savePlayerKeyboardMapping(playerSlot: number, mapping: KeyboardMapping): void {
+  const slot = Math.max(1, Math.min(4, Math.floor(Number(playerSlot) || 1)));
+  try {
+    const key = getPlayerKeyboardStorageKey(slot);
+    localStorage.setItem(key, JSON.stringify(mapping));
+    if (slot === 1) {
+      localStorage.setItem(KEYBOARD_STORAGE_KEY, JSON.stringify(mapping));
+    }
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("controls-mapping-changed", { detail: { playerSlot: slot } }));
+    window.dispatchEvent(new Event("keyboard-mapping-changed"));
+  }
+}
+
+export function loadPlayerGamepadMapping(playerSlot: number): GamepadMapping {
+  const slot = Math.max(1, Math.min(4, Math.floor(Number(playerSlot) || 1)));
+  try {
+    const key = getPlayerGamepadStorageKey(slot);
+    const stored = localStorage.getItem(key);
+    if (stored) {
+      return { ...DEFAULT_MAPPING, ...JSON.parse(stored) };
+    }
+    // Check legacy storage key for slot 1
+    if (slot === 1) {
+      const legacy = localStorage.getItem(STORAGE_KEY);
+      if (legacy) {
+        return { ...DEFAULT_MAPPING, ...JSON.parse(legacy) };
+      }
+    }
+  } catch {}
+  return { ...DEFAULT_MAPPING };
+}
+
+export function savePlayerGamepadMapping(playerSlot: number, mapping: GamepadMapping): void {
+  const slot = Math.max(1, Math.min(4, Math.floor(Number(playerSlot) || 1)));
+  try {
+    const key = getPlayerGamepadStorageKey(slot);
+    localStorage.setItem(key, JSON.stringify(mapping));
+    if (slot === 1) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(mapping));
+    }
+  } catch {}
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("controls-mapping-changed", { detail: { playerSlot: slot } }));
+    window.dispatchEvent(new Event("gamepad-mapping-changed"));
+  }
+}
+
+// Legacy wrappers for backwards compatibility
+export function loadMapping(): GamepadMapping {
+  return loadPlayerGamepadMapping(1);
+}
+
+export function saveMapping(mapping: GamepadMapping): void {
+  savePlayerGamepadMapping(1, mapping);
+}
 
 export function loadKeyboardMapping(): KeyboardMapping {
-  try {
-    const stored = localStorage.getItem(KEYBOARD_STORAGE_KEY);
-    if (stored) return { ...DEFAULT_KEYBOARD_MAPPING, ...JSON.parse(stored) };
-  } catch {}
-  return { ...DEFAULT_KEYBOARD_MAPPING };
+  return loadPlayerKeyboardMapping(1);
 }
 
 export function saveKeyboardMapping(mapping: KeyboardMapping): void {
-  localStorage.setItem(KEYBOARD_STORAGE_KEY, JSON.stringify(mapping));
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event("keyboard-mapping-changed"));
+  savePlayerKeyboardMapping(1, mapping);
+}
+
+/**
+ * Assigns a key to an action, unbinding any other action that already uses that key
+ * to prevent duplicate input conflicts.
+ */
+export function assignKeyboardBinding(
+  mapping: KeyboardMapping,
+  actionToAssign: string,
+  newKey: string
+): KeyboardMapping {
+  const updated: KeyboardMapping = { ...mapping };
+  const targetKeyLower = newKey.toLowerCase();
+
+  for (const [action, key] of Object.entries(updated)) {
+    if (action !== actionToAssign && key.toLowerCase() === targetKeyLower) {
+      delete updated[action];
+    }
   }
+  updated[actionToAssign] = newKey;
+  return updated;
+}
+
+/**
+ * Assigns a gamepad button or axis to an action, clearing any previous assignments
+ * to that button/axis or to that action to prevent conflict.
+ */
+export function assignGamepadBinding(
+  mapping: GamepadMapping,
+  actionToAssign: string,
+  newButtonOrAxis: string
+): GamepadMapping {
+  const updated: GamepadMapping = { ...mapping };
+
+  for (const [btn, act] of Object.entries(updated)) {
+    if (btn === newButtonOrAxis) {
+      delete updated[btn];
+    }
+    if (act === actionToAssign && !btn.startsWith("axis")) {
+      delete updated[btn];
+    }
+  }
+  updated[newButtonOrAxis] = actionToAssign;
+  return updated;
 }
 
 export function formatKeyLabel(key: string): string {

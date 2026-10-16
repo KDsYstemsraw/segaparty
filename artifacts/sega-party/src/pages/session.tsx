@@ -15,7 +15,7 @@ import {
   type ChatMessage,
   type ParticipantInfo,
 } from "@/lib/webrtc";
-import { getPlayerActionKey, simulateEmulatorInput, loadKeyboardMapping } from "@/lib/gamepadMapping";
+import { getPlayerActionKey, simulateEmulatorInput, loadPlayerKeyboardMapping } from "@/lib/gamepadMapping";
 import { useGamepad } from "@/hooks/useGamepad";
 
 import { ControlsModal } from "@/components/ControlsModal";
@@ -134,13 +134,6 @@ export default function SessionPage() {
   const [currentRomUrl, setCurrentRomUrl] = useState<string | null>(() => getRomUrl());
   const [isReloadingRom, setIsReloadingRom] = useState(false);
   const [activeButtons, setActiveButtons] = useState<Set<string>>(new Set());
-  const [keyboardMapping, setKeyboardMapping] = useState(() => loadKeyboardMapping());
-
-  useEffect(() => {
-    const update = () => setKeyboardMapping(loadKeyboardMapping());
-    window.addEventListener("keyboard-mapping-changed", update);
-    return () => window.removeEventListener("keyboard-mapping-changed", update);
-  }, []);
 
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -183,6 +176,27 @@ export default function SessionPage() {
     return null;
   })();
   const effectiveSlot = mySlot ?? (!isHost ? 2 : 1);
+
+  const [keyboardMapping, setKeyboardMapping] = useState(() => loadPlayerKeyboardMapping(effectiveSlot));
+
+  useEffect(() => {
+    setKeyboardMapping(loadPlayerKeyboardMapping(effectiveSlot));
+  }, [effectiveSlot]);
+
+  useEffect(() => {
+    const onMappingChanged = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (!detail || detail.playerSlot === effectiveSlot) {
+        setKeyboardMapping(loadPlayerKeyboardMapping(effectiveSlot));
+      }
+    };
+    window.addEventListener("controls-mapping-changed", onMappingChanged);
+    window.addEventListener("keyboard-mapping-changed", onMappingChanged);
+    return () => {
+      window.removeEventListener("controls-mapping-changed", onMappingChanged);
+      window.removeEventListener("keyboard-mapping-changed", onMappingChanged);
+    };
+  }, [effectiveSlot]);
 
 
   // Prompt nickname modal ONLY if guest arrived without any stored or chosen nickname
@@ -1769,7 +1783,9 @@ export default function SessionPage() {
       <ControlsModal
         open={controlsOpen}
         onClose={() => setControlsOpen(false)}
-        {...({ activeCore } as { activeCore?: string })}
+        activeCore={activeCore}
+        playerSlot={effectiveSlot}
+        isHost={isHost}
       />
 
       {/* Invite Friends & QR Code Modal */}
