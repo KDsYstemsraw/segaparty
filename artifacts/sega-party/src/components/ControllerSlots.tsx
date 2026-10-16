@@ -11,9 +11,7 @@ import {
   Coins,
   Zap,
   Radio,
-  CircleDot,
   Settings2,
-  Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -141,7 +139,7 @@ export function ControllerSlots({
   );
 
   return (
-    <div className="w-full space-y-3 font-sans">
+    <div className="w-full space-y-2 font-sans">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Gamepad2 className="w-4 h-4 text-accent animate-pulse" />
@@ -178,7 +176,8 @@ export function ControllerSlots({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* Compact Player Slot Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
         {[1, 2, 3, 4].map((slotNum) => {
           const cfg = SLOT_CONFIGS[slotNum];
           const holder = slots[slotNum];
@@ -195,45 +194,45 @@ export function ControllerSlots({
                   : "border-dashed border-border/70 bg-card/40 hover:border-primary/50"
               )}
             >
-              <CardContent className="p-3.5 flex flex-col justify-between h-full space-y-3">
+              <CardContent className="p-2.5 flex flex-col justify-between h-full space-y-2">
                 {/* Header: Player Tag (1UP..4UP) & Status Orb */}
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <span
                       className={cn(
-                        "font-display font-black text-sm px-2 py-0.5 rounded border tracking-wider bg-background/90 shadow-sm",
+                        "font-display font-black text-xs px-1.5 py-0 rounded border tracking-wider bg-background/90 shadow-sm",
                         cfg.color,
                         cfg.border
                       )}
                     >
                       {cfg.upTag}
                     </span>
-                    <span className="font-sans font-bold text-xs uppercase tracking-wider text-foreground">
+                    <span className="font-sans font-bold text-[11px] uppercase tracking-wider text-foreground">
                       {cfg.name}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1">
                     {isOccupied ? (
                       <>
                         {/* Glowing Online Status Orb */}
-                        <span className="relative flex h-2 w-2 mr-1">
+                        <span className="relative flex h-2 w-2 mr-0.5">
                           <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", cfg.neonColor)} />
                           <span className={cn("relative inline-flex rounded-full h-2 w-2", cfg.neonColor)} />
                         </span>
 
                         {holder.isHost ? (
-                          <Badge variant="outline" className="text-[10px] border-primary/50 text-primary py-0 px-1.5 gap-1 font-bold">
+                          <Badge variant="outline" className="text-[9px] border-primary/50 text-primary py-0 px-1 gap-0.5 font-bold">
                             <Crown className="w-2.5 h-2.5 text-amber-400" /> Host
                           </Badge>
                         ) : isMe ? (
-                          <Badge variant="outline" className="text-[10px] border-accent/50 text-accent py-0 px-1.5 gap-1 font-bold">
+                          <Badge variant="outline" className="text-[9px] border-accent/50 text-accent py-0 px-1 gap-0.5 font-bold">
                             <Sparkles className="w-2.5 h-2.5" /> You
                           </Badge>
                         ) : null}
                       </>
                     ) : (
-                      <span className="text-[10px] font-sans uppercase font-bold text-muted-foreground/60 tracking-wider">
+                      <span className="text-[9px] font-sans uppercase font-bold text-muted-foreground/60 tracking-wider">
                         Open Slot
                       </span>
                     )}
@@ -245,10 +244,10 @@ export function ControllerSlots({
                           <Button
                             size="icon"
                             variant="ghost"
-                            className="h-6 w-6 text-muted-foreground hover:text-primary p-0"
+                            className="h-5 w-5 text-muted-foreground hover:text-primary p-0"
                             title={`Host Moderation P${slotNum}`}
                           >
-                            <MoreVertical className="w-3.5 h-3.5" />
+                            <MoreVertical className="w-3 h-3" />
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-52 bg-card border-border">
@@ -293,111 +292,95 @@ export function ControllerSlots({
                 </div>
 
                 {/* Occupant details or Claim / Pass / Request controls */}
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {isOccupied ? (
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <Gamepad2 className={cn("w-4 h-4 shrink-0", cfg.color)} />
-                        <span className="font-sans font-bold text-sm truncate text-foreground">
+                        <Gamepad2 className={cn("w-3.5 h-3.5 shrink-0", cfg.color)} />
+                        <span className="font-sans font-bold text-xs truncate text-foreground">
                           {holder.playerName}
                         </span>
                       </div>
-                      <p className="text-[10px] text-muted-foreground font-sans uppercase tracking-wider flex items-center gap-1">
-                        <Radio className="w-2.5 h-2.5 text-accent" />
+                      <p className="text-[9px] text-muted-foreground font-sans uppercase tracking-wider flex items-center gap-1">
+                        <Radio className="w-2 h-2 text-accent" />
                         {isMe ? "Active on your controls" : "Remote player controller"}
                       </p>
                     </div>
                   ) : (
-                    <div className="space-y-1">
+                    <div>
                       <Button
                         size="sm"
                         onClick={() => onClaimSlot(slotNum)}
                         className={cn(
-                          "w-full h-9 text-xs font-black font-display tracking-widest uppercase transition-all flex items-center justify-center gap-1.5",
-                          "bg-gradient-to-r from-primary/30 via-primary/60 to-primary/30 hover:from-primary hover:to-primary text-primary-foreground border border-primary/70 shadow-[0_0_15px_rgba(0,180,255,0.35)] animate-pulse hover:animate-none hover:scale-[1.02]"
+                          "w-full h-7 text-[10px] font-black font-display tracking-wider uppercase transition-all flex items-center justify-center gap-1",
+                          "bg-gradient-to-r from-primary/30 via-primary/60 to-primary/30 hover:from-primary hover:to-primary text-primary-foreground border border-primary/70 shadow-[0_0_12px_rgba(0,180,255,0.3)] animate-pulse hover:animate-none hover:scale-[1.01]"
                         )}
                       >
-                        <Coins className="w-3.5 h-3.5 text-yellow-300 animate-bounce" />
-                        <span>INSERT COIN / PRESS TO JOIN</span>
+                        <Coins className="w-3 h-3 text-yellow-300 animate-bounce" />
+                        <span>INSERT COIN / JOIN</span>
                       </Button>
-                      <p className="text-[9px] text-center text-muted-foreground font-mono uppercase tracking-wider">
-                        FREE PLAY · READY
-                      </p>
                     </div>
                   )}
 
-                  {/* If isMe: Keybind Setup Wizard & Pass Controller / Release */}
+                  {/* If isMe: Pass Controller dropdown & Release (Spectate) button */}
                   {isMe && (
-                    <div className="space-y-1.5 pt-1">
-                      {onOpenControls && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={onOpenControls}
-                          className="w-full h-7 text-xs border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
-                        >
-                          <Wand2 className="w-3 h-3 text-accent" /> Keybind Setup Wizard
-                        </Button>
-                      )}
+                    <div className="flex items-center gap-1 pt-0.5">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="flex-1 h-6 text-[10px] px-1.5 border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
+                          >
+                            <Send className="w-2.5 h-2.5" /> Pass
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="w-48 bg-card border-border">
+                          <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
+                            Pass to Spectator
+                          </DropdownMenuLabel>
+                          <DropdownMenuSeparator />
+                          {eligibleSpectators.length === 0 ? (
+                            <div className="p-2 text-xs text-muted-foreground text-center">
+                              No spectators available
+                            </div>
+                          ) : (
+                            eligibleSpectators.map((p) => (
+                              <DropdownMenuItem
+                                key={p.peerId}
+                                onClick={() => onPassSlot?.(slotNum, p.peerId, p.playerName)}
+                                className="cursor-pointer text-xs flex items-center justify-between"
+                              >
+                                <span className="font-bold truncate">{p.playerName}</span>
+                                <span className="text-[10px] text-muted-foreground font-mono">Give</span>
+                              </DropdownMenuItem>
+                            ))
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
 
-                      <div className="flex items-center gap-1.5">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="flex-1 h-7 text-xs border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
-                            >
-                              <Send className="w-3 h-3" /> Pass Controller
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="start" className="w-48 bg-card border-border">
-                            <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
-                              Pass to Spectator
-                            </DropdownMenuLabel>
-                            <DropdownMenuSeparator />
-                            {eligibleSpectators.length === 0 ? (
-                              <div className="p-2 text-xs text-muted-foreground text-center">
-                                No spectators available
-                              </div>
-                            ) : (
-                              eligibleSpectators.map((p) => (
-                                <DropdownMenuItem
-                                  key={p.peerId}
-                                  onClick={() => onPassSlot?.(slotNum, p.peerId, p.playerName)}
-                                  className="cursor-pointer text-xs flex items-center justify-between"
-                                >
-                                  <span className="font-bold truncate">{p.playerName}</span>
-                                  <span className="text-[10px] text-muted-foreground font-mono">Give</span>
-                                </DropdownMenuItem>
-                              ))
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => onReleaseSlot(slotNum)}
-                          className="h-7 text-xs border-muted-foreground/30 text-muted-foreground hover:text-destructive hover:border-destructive font-sans px-2"
-                          title="Release (Spectate)"
-                        >
-                          <UserX className="w-3 h-3 mr-1" /> Spectate
-                        </Button>
-                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onReleaseSlot(slotNum)}
+                        className="h-6 text-[10px] px-1.5 border-muted-foreground/30 text-muted-foreground hover:text-destructive hover:border-destructive font-sans"
+                        title="Release (Spectate)"
+                      >
+                        <UserX className="w-2.5 h-2.5 mr-0.5" /> Spectate
+                      </Button>
                     </div>
                   )}
 
                   {/* If occupied by someone else, AND !mySlot (current user is spectator): Request Controller button */}
                   {isOccupied && !isMe && !mySlot && (
-                    <div className="pt-1">
+                    <div className="pt-0.5">
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={() => onRequestSlot?.(slotNum)}
-                        className="w-full h-7 text-xs border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1.5 font-sans"
+                        className="w-full h-6 text-[10px] px-1.5 border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
                       >
-                        <Hand className="w-3 h-3 text-accent" /> Request Controller
+                        <Hand className="w-2.5 h-2.5 text-accent" /> Request Controller
                       </Button>
                     </div>
                   )}
@@ -405,26 +388,26 @@ export function ControllerSlots({
 
                 {/* Real-time Arcade Button Activity HUD (when isMe) */}
                 {isMe && (
-                  <div className="pt-2 border-t border-border/50 space-y-1.5">
-                    <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+                  <div className="pt-1.5 border-t border-border/50 space-y-1">
+                    <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-muted-foreground">
                       <span className="flex items-center gap-1 font-bold text-foreground">
-                        <Zap className="w-3 h-3 text-accent animate-pulse" /> Arcade HUD
+                        <Zap className="w-2.5 h-2.5 text-accent animate-pulse" /> Arcade HUD
                       </span>
-                      <span className="text-accent font-bold animate-pulse text-[9px] bg-accent/20 px-1 rounded border border-accent/40">
+                      <span className="text-accent font-bold animate-pulse text-[8px] bg-accent/20 px-1 py-0 rounded border border-accent/40">
                         LIVE BUS
                       </span>
                     </div>
-                    <div className="grid grid-cols-6 gap-1">
+                    <div className="grid grid-cols-6 gap-0.5">
                       {BUTTON_INDICATORS.map((btn) => {
                         const isDown = activeButtons.has(btn.id);
                         return (
                           <span
                             key={btn.id}
                             className={cn(
-                              "text-[9px] font-mono font-bold text-center py-1 rounded transition-all select-none",
+                              "text-[8px] font-mono font-bold text-center py-0.5 rounded transition-all select-none",
                               isDown
-                                ? "bg-accent text-accent-foreground shadow-[0_0_12px_rgba(255,30,30,0.95)] translate-y-0.5 border-t-2 border-white/40 scale-105 font-black ring-1 ring-accent"
-                                : "bg-black/60 border border-white/10 text-muted-foreground/80 shadow-[0_2px_0_rgba(255,255,255,0.08)]"
+                                ? "bg-accent text-accent-foreground shadow-[0_0_10px_rgba(255,30,30,0.95)] translate-y-0.5 border-t border-white/40 font-black ring-1 ring-accent"
+                                : "bg-black/60 border border-white/10 text-muted-foreground/80 shadow-[0_1px_0_rgba(255,255,255,0.06)]"
                             )}
                           >
                             {btn.label}
