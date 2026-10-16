@@ -1259,7 +1259,7 @@ export default function SessionPage() {
             onClick={() => setLocation("/")}
             className="font-display font-black text-xl text-primary hover:text-accent transition-colors flex items-center gap-1.5"
           >
-            <Gamepad2 className="w-5 h-5 text-accent" /> SEGA PARTY
+            <Gamepad2 className="w-5 h-5 text-accent" /> RETROPARTY
           </button>
 
           <span className="hidden md:inline-block text-[9px] uppercase font-bold text-muted-foreground font-mono px-1.5 py-0.5 rounded bg-muted/40 border border-border tracking-wider">
@@ -1663,7 +1663,7 @@ export default function SessionPage() {
         <DialogContent className="max-w-md bg-card border-primary/60 font-sans shadow-2xl">
           <DialogHeader>
             <DialogTitle className="font-display text-2xl text-primary flex items-center gap-2">
-              <Gamepad2 className="w-6 h-6 text-accent" /> Join Sega Party Room
+              <Gamepad2 className="w-6 h-6 text-accent" /> Join RetroParty Room
             </DialogTitle>
             <DialogDescription className="font-sans text-xs text-muted-foreground">
               You were invited to room <span className="font-bold text-foreground font-mono">{code}</span>. Enter your nickname to jump in!

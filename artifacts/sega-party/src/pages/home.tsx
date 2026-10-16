@@ -78,7 +78,7 @@ export default function Home() {
 
     if (romMethod === "file") {
       if (!romFile) {
-        toast({ title: "Error", description: "Please select a ROM file from your computer.", variant: "destructive" });
+        toast({ title: "Error", description: "Please select a game ROM or disc image from your computer.", variant: "destructive" });
         return;
       }
       await setRom(romFile, selectedCore);
@@ -146,11 +146,11 @@ export default function Home() {
         </div>
 
         <h1 className="text-5xl md:text-7xl font-black text-transparent bg-clip-text bg-gradient-to-r from-primary via-accent to-primary drop-shadow-[0_0_20px_rgba(0,71,187,0.5)] font-display tracking-wider">
-          SEGA PARTY
+          RETROPARTY
         </h1>
 
         <p className="text-muted-foreground text-sm font-sans tracking-wide">
-          Multiplayer party rooms for Sega Genesis, PS1, SNES, N64, GBA & more
+          Multiplayer party rooms for PlayStation, Nintendo, Sega, Arcade & more
         </p>
       </div>
 
