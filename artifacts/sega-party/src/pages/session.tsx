@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useLocation } from "wouter";
 import { useGetSession, useJoinSession, getGetSessionQueryKey } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Emulator } from "@/components/emulator";
 import { getRomUrl, getRomName, setRom, setRomFromUrl } from "@/lib/romStore";
 import {
@@ -69,10 +70,13 @@ export default function SessionPage() {
   const code = rawCode.toUpperCase();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const [myPlayerId, setMyPlayerId] = useState<string>(() => getStoredPlayerId(code));
   const [myPlayerName, setMyPlayerName] = useState<string>(() => getStoredPlayerName(code));
   const myPeerId = useRef(crypto.randomUUID());
+  const hasJoinedRef = useRef(Boolean(getStoredPlayerName(code) || myPlayerName));
+  const hasDismissedPrompt = useRef(false);
 
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [hasWsStream, setHasWsStream] = useState(false);
@@ -162,15 +166,28 @@ export default function SessionPage() {
   const effectiveSlot = mySlot ?? (!isHost ? 2 : 1);
 
 
-  // Prompt nickname modal if guest arrived via link without playerId or with stale playerId
+  // Prompt nickname modal ONLY if guest arrived without any stored or chosen nickname
   useEffect(() => {
-    if (!isLoading && session) {
-      const isMember = myPlayerId && (session.hostId === myPlayerId || session.players?.some((p) => p.id === myPlayerId));
-      if (!isMember) {
-        setJoinPromptOpen(true);
-      }
+    if (isLoading || !session) return;
+
+    const storedName = getStoredPlayerName(code);
+    const currentName = myPlayerName || storedName;
+
+    // If the user already has a name chosen (or already submitted/dismissed), NEVER open the prompt
+    if (currentName || hasJoinedRef.current || hasDismissedPrompt.current) {
+      setJoinPromptOpen(false);
+      return;
     }
-  }, [isLoading, session, myPlayerId]);
+
+    // If the user is the host, never show guest join prompt
+    if (myPlayerId && session.hostId === myPlayerId) {
+      setJoinPromptOpen(false);
+      return;
+    }
+
+    // Only open if the user has no name and has not joined
+    setJoinPromptOpen(true);
+  }, [isLoading, session?.hostId, session?.code, myPlayerName, myPlayerId, code]);
 
   // Track button activity for live UI monitor
   const handleButtonActivity = useCallback((action: string, isDown: boolean) => {
@@ -358,7 +375,7 @@ export default function SessionPage() {
           let pc = peerConnsRef.current.get(fromPeerId);
           const isRenegotiation = Boolean(data.isRenegotiation && pc && pc.signalingState !== "closed");
 
-          if (!isRenegotiation) {
+          if (!isRenegotiation || !pc) {
             if (pc) {
               try { pc.close(); } catch {}
             }
@@ -1034,23 +1051,33 @@ export default function SessionPage() {
     if (!guestNameInput.trim()) return;
 
     const name = guestNameInput.trim();
+    hasJoinedRef.current = true;
+    setJoinPromptOpen(false);
+
+    const fallbackPlayerId = myPlayerId || crypto.randomUUID();
+    setStoredPlayerIdentity(code, fallbackPlayerId, name);
+    setMyPlayerId(fallbackPlayerId);
+    setMyPlayerName(name);
 
     joinSession.mutate(
       { code, data: { playerName: name } },
       {
         onSuccess: (resp) => {
+          hasJoinedRef.current = true;
           setStoredPlayerIdentity(code, resp.playerId, name);
           setMyPlayerId(resp.playerId);
           setMyPlayerName(name);
           setJoinPromptOpen(false);
+          // Optimistically update React Query cache so session.players immediately contains this player
+          try {
+            queryClient.setQueryData(getGetSessionQueryKey(code), resp.session);
+          } catch {}
           refetch();
         },
         onError: () => {
-          toast({
-            title: "Join Error",
-            description: "Could not join session. It may be full or ended.",
-            variant: "destructive",
-          });
+          // Still keep the user in the room as guest/spectator with their entered name!
+          hasJoinedRef.current = true;
+          setJoinPromptOpen(false);
         },
       },
     );
@@ -1471,7 +1498,15 @@ export default function SessionPage() {
 
 
       {/* Quick Join Dialog (when visiting via URL directly) */}
-      <Dialog open={joinPromptOpen} onOpenChange={setJoinPromptOpen}>
+      <Dialog
+        open={joinPromptOpen}
+        onOpenChange={(open) => {
+          setJoinPromptOpen(open);
+          if (!open) {
+            hasDismissedPrompt.current = true;
+          }
+        }}
+      >
         <DialogContent className="max-w-md bg-card border-primary/60 font-sans shadow-2xl">
           <DialogHeader>
             <DialogTitle className="font-display text-2xl text-primary flex items-center gap-2">

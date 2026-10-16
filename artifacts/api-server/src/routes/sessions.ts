@@ -142,28 +142,42 @@ router.post("/sessions/:code/join", async (req, res) => {
 
   const players = session.players as Array<{ id: string; name: string; isHost: boolean; playerIndex: number }>;
 
-  if (players.length >= session.maxPlayers) {
-    res.status(400).json({ error: "Session is full" });
-    return;
+  const existingIndex = players.findIndex(
+    (p) => p.name.trim().toLowerCase() === playerName.trim().toLowerCase(),
+  );
+
+  let playerId: string;
+  let updatedPlayers: Array<{ id: string; name: string; isHost: boolean; playerIndex: number }>;
+  let updatedMaxPlayers = session.maxPlayers;
+
+  if (existingIndex !== -1) {
+    playerId = players[existingIndex].id || generatePlayerId();
+    players[existingIndex].name = playerName;
+    players[existingIndex].id = playerId;
+    updatedPlayers = [...players];
+  } else {
+    playerId = generatePlayerId();
+    const playerIndex = players.length < session.maxPlayers ? players.length + 1 : 0;
+    updatedMaxPlayers = Math.max(session.maxPlayers, players.length + 1);
+    updatedPlayers = [
+      ...players,
+      {
+        id: playerId,
+        name: playerName,
+        isHost: false,
+        playerIndex,
+      },
+    ];
   }
 
-  const playerId = generatePlayerId();
-  const playerIndex = players.length + 1;
-
-  const updatedPlayers = [
-    ...players,
-    {
-      id: playerId,
-      name: playerName,
-      isHost: false,
-      playerIndex,
-    },
-  ];
-
   if (hasDatabase && db) {
-    await db.update(sessionsTable).set({ players: updatedPlayers }).where(eq(sessionsTable.code, code));
+    await db
+      .update(sessionsTable)
+      .set({ players: updatedPlayers, maxPlayers: updatedMaxPlayers })
+      .where(eq(sessionsTable.code, code));
   } else {
     session.players = updatedPlayers;
+    session.maxPlayers = updatedMaxPlayers;
     inMemorySessions.set(code, session);
   }
 
@@ -172,7 +186,7 @@ router.post("/sessions/:code/join", async (req, res) => {
       code: session.code,
       hostId: session.hostId,
       players: updatedPlayers,
-      maxPlayers: session.maxPlayers,
+      maxPlayers: updatedMaxPlayers,
       createdAt: session.createdAt.toISOString(),
     },
     playerId,
