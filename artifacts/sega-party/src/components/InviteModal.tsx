@@ -1,10 +1,16 @@
-﻿import React from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import React, { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Copy, QrCode, Smartphone, Users, Check } from "lucide-react";
+import { Copy, Users, Check, Smartphone, Sparkles, QrCode, Globe } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-interface InviteModalProps {
+export interface InviteModalProps {
   open: boolean;
   onClose: () => void;
   sessionCode: string;
@@ -12,86 +18,184 @@ interface InviteModalProps {
 
 export function InviteModal({ open, onClose, sessionCode }: InviteModalProps) {
   const { toast } = useToast();
-  const [copied, setCopied] = React.useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [showQr, setShowQr] = useState(false);
 
-  const inviteUrl = typeof window !== "undefined" ? `${window.location.origin}/session/${sessionCode}` : "";
-  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(inviteUrl)}&color=0047BB&bgcolor=000000`;
+  const inviteUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/session/${sessionCode}`
+      : "";
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
+    inviteUrl
+  )}&color=00B4FF&bgcolor=0a0a0a`;
 
-  const handleCopy = () => {
+  const handleCopyLink = () => {
     navigator.clipboard.writeText(inviteUrl).then(() => {
-      setCopied(true);
+      setCopiedLink(true);
       toast({
         title: "Room link copied!",
         description: "Send this URL to your friends to play together.",
       });
-      setTimeout(() => setCopied(false), 3000);
+      setTimeout(() => setCopiedLink(false), 2500);
+    });
+  };
+
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(sessionCode).then(() => {
+      setCopiedCode(true);
+      toast({
+        title: "Room code copied!",
+        description: `Code: ${sessionCode}`,
+      });
+      setTimeout(() => setCopiedCode(false), 2500);
     });
   };
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-md bg-card border-primary/60 font-sans shadow-2xl">
-        <DialogHeader className="text-center">
-          <DialogTitle className="font-display text-2xl text-primary flex items-center justify-center gap-2">
-            <Users className="w-6 h-6 text-accent" /> Invite Friends
-          </DialogTitle>
-          <DialogDescription className="font-sans text-xs text-muted-foreground">
-            Share this room with anyone. They can join instantly with zero installs!
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent className="max-w-lg rounded-2xl border-white/15 bg-card/95 backdrop-blur-xl font-sans shadow-2xl p-0 overflow-hidden">
+        {/* Top Gradient Banner */}
+        <div className="h-1.5 w-full bg-gradient-to-r from-primary via-cyan-400 to-accent" />
 
-        <div className="space-y-5 my-2">
-          {/* Room Code Callout */}
-          <div className="text-center p-3 bg-black/50 border border-primary/40 rounded-lg">
-            <span className="text-[10px] font-sans uppercase font-bold text-muted-foreground tracking-widest block mb-1">
+        <div className="p-5 sm:p-6 space-y-5">
+          <DialogHeader className="text-center space-y-1.5">
+            <div className="w-11 h-11 rounded-2xl bg-primary/20 border border-primary/40 flex items-center justify-center text-primary mx-auto shadow-[0_0_20px_rgba(0,180,255,0.25)]">
+              <Users className="w-6 h-6 text-accent animate-pulse" />
+            </div>
+            <DialogTitle className="font-sans text-2xl font-black text-foreground">
+              Invite Friends to Play
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground/90 max-w-sm mx-auto">
+              Share your room to start instant 60 FPS multiplayer. Zero downloads or setup needed for guests!
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* 1. Prominent Room Code Display */}
+          <div className="p-4 rounded-2xl bg-neutral-950/80 border border-white/10 text-center space-y-2 relative overflow-hidden group shadow-inner">
+            <span className="text-[10px] font-sans uppercase font-bold text-muted-foreground tracking-widest block">
               Room Code
             </span>
-            <div className="font-display text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-primary via-accent to-primary tracking-[0.25em]">
+            <div className="font-mono text-4xl sm:text-5xl font-black tracking-[0.25em] text-transparent bg-clip-text bg-gradient-to-r from-primary via-cyan-300 to-accent select-all">
               {sessionCode}
             </div>
-          </div>
-
-          {/* Copy Link Button */}
-          <div className="space-y-1.5">
-            <div className="flex gap-2">
-              <input
-                readOnly
-                value={inviteUrl}
-                className="w-full bg-muted/40 border border-border px-3 py-2 text-xs font-mono rounded text-foreground select-all"
-              />
+            <div className="pt-1">
               <Button
-                onClick={handleCopy}
+                type="button"
                 size="sm"
-                className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-4 gap-1.5"
+                variant="outline"
+                onClick={handleCopyCode}
+                className="h-7 px-3 text-xs rounded-xl border-white/15 bg-white/[0.04] hover:bg-white/[0.1] text-foreground font-semibold gap-1.5"
               >
-                {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
-                {copied ? "Copied" : "Copy"}
+                {copiedCode ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400 font-bold">Code Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span>Copy Room Code</span>
+                  </>
+                )}
               </Button>
             </div>
           </div>
 
-          {/* Mobile QR Code Scanner */}
-          <div className="flex flex-col items-center justify-center p-4 bg-black/40 border border-border/80 rounded-lg">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-foreground mb-2">
-              <Smartphone className="w-4 h-4 text-accent" /> Scan with Phone to Play
-            </div>
-            <div className="w-44 h-44 bg-black p-2 border-2 border-primary rounded-lg flex items-center justify-center shadow-lg">
-              <img
-                src={qrUrl}
-                alt="Room QR Code"
-                className="w-full h-full object-contain rounded"
-                loading="lazy"
+          {/* 2. Direct Shareable Invite Link Box */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+              <Globe className="w-3.5 h-3.5 text-primary" /> Shareable Room URL
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                readOnly
+                value={inviteUrl}
+                className="w-full bg-white/[0.04] border border-white/15 px-3 py-2 text-xs font-mono rounded-xl text-foreground select-all focus:outline-none focus:ring-1 focus:ring-primary"
               />
+              <Button
+                onClick={handleCopyLink}
+                size="sm"
+                className="h-9 px-4 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-bold shrink-0 shadow-sm transition-all hover:scale-[1.02] gap-1.5"
+              >
+                {copiedLink ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-300" />
+                    <span>Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy Link</span>
+                  </>
+                )}
+              </Button>
             </div>
-            <p className="text-[10px] text-muted-foreground text-center mt-2 font-sans">
-              Smartphones will automatically show the touch controller!
-            </p>
           </div>
-        </div>
 
-        <Button onClick={onClose} variant="outline" className="w-full font-bold font-sans">
-          Done
-        </Button>
+          {/* 3. Friendly 3-Step Consumer Note */}
+          <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-foreground">
+              <Sparkles className="w-3.5 h-3.5 text-accent" />
+              <span>How Friends Join:</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-muted-foreground">
+              <div className="p-2 rounded-xl bg-black/30 border border-white/5 space-y-0.5">
+                <span className="font-bold text-primary block">1. Send Link</span>
+                <span>Send the link or room code to friends via Discord or chat.</span>
+              </div>
+              <div className="p-2 rounded-xl bg-black/30 border border-white/5 space-y-0.5">
+                <span className="font-bold text-accent block">2. Open in Browser</span>
+                <span>Works on PC, Mac, Chrome, Edge, and iOS/Android phones.</span>
+              </div>
+              <div className="p-2 rounded-xl bg-black/30 border border-white/5 space-y-0.5">
+                <span className="font-bold text-emerald-400 block">3. Instant Play</span>
+                <span>Zero ROM downloads or plugins needed. Jump straight in!</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 4. Optional Mobile Phone QR Code Accordion */}
+          <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowQr(!showQr)}
+              className="w-full px-3 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground flex items-center justify-between transition-colors"
+            >
+              <span className="flex items-center gap-1.5">
+                <Smartphone className="w-3.5 h-3.5 text-primary" />
+                <span>Scan QR Code on Phone (Includes Touch Gamepad)</span>
+              </span>
+              <span className="text-[10px] text-primary font-mono font-bold">
+                {showQr ? "Hide QR" : "Show QR"}
+              </span>
+            </button>
+
+            {showQr && (
+              <div className="p-4 pt-1 flex flex-col items-center justify-center space-y-2 border-t border-white/10 bg-black/40">
+                <div className="w-48 h-48 bg-neutral-950 p-2.5 border border-primary/40 rounded-2xl flex items-center justify-center shadow-lg">
+                  <img
+                    src={qrUrl}
+                    alt="Room QR Code"
+                    className="w-full h-full object-contain rounded-xl"
+                    loading="lazy"
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground text-center">
+                  Smartphones will automatically load the virtual touch controller deck!
+                </p>
+              </div>
+            )}
+          </div>
+
+          <Button
+            onClick={onClose}
+            variant="outline"
+            className="w-full h-10 rounded-xl border-white/15 hover:bg-white/10 text-foreground font-bold font-sans transition-all"
+          >
+            Done
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );

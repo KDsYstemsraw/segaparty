@@ -901,16 +901,16 @@ export function ControlsModal({
         }
       }}
     >
-      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto bg-card/95 backdrop-blur-xl border-primary/50 font-sans shadow-2xl p-0">
+      <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto rounded-2xl border border-white/15 bg-card/95 backdrop-blur-xl font-sans shadow-2xl p-0">
         {/* Top Header Cyber Accent */}
         <div className="h-1.5 w-full bg-gradient-to-r from-primary via-cyan-400 to-accent" />
 
         <div className="p-4 sm:p-6 space-y-4">
           <DialogHeader className="space-y-3">
             {/* 1. Auto-Detected Console & Controller High-Contrast Banner */}
-            <div className="p-3.5 rounded-2xl bg-neutral-900/95 border-2 border-primary/50 shadow-lg flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="p-4 rounded-2xl bg-neutral-900/95 border border-white/15 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-3.5">
               <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-primary/20 border border-primary/40 flex items-center justify-center text-primary shrink-0 shadow-[0_0_15px_rgba(0,180,255,0.25)]">
+                <div className="w-11 h-11 rounded-2xl bg-primary/20 border border-primary/40 flex items-center justify-center text-primary shrink-0 shadow-[0_0_20px_rgba(0,180,255,0.25)]">
                   <Gamepad2 className="w-6 h-6 text-accent animate-pulse" />
                 </div>
                 <div className="space-y-0.5">
@@ -918,7 +918,7 @@ export function ControlsModal({
                     <Badge
                       variant="outline"
                       className={cn(
-                        "text-xs font-bold py-0.5 px-2.5 uppercase tracking-wider font-mono",
+                        "text-xs font-bold py-0.5 px-2.5 uppercase tracking-wider font-mono rounded-full",
                         consoleSys.badgeColor,
                       )}
                     >
@@ -928,7 +928,7 @@ export function ControlsModal({
                       Detected Console & Controller
                     </span>
                   </div>
-                  <DialogTitle className="text-base font-extrabold text-foreground font-display flex items-center gap-2">
+                  <DialogTitle className="text-base font-extrabold text-foreground font-sans flex items-center gap-2">
                     {getConsoleControllerTitle(activeCore)}
                   </DialogTitle>
                   <p className="text-[11px] text-muted-foreground font-mono flex items-center gap-2">
@@ -950,10 +950,10 @@ export function ControlsModal({
                       type="button"
                       onClick={() => setSelectedSlot(slot)}
                       className={cn(
-                        "px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border shadow-sm",
+                        "px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border shadow-sm",
                         isSelected
                           ? "bg-primary text-primary-foreground border-primary shadow-[0_0_12px_rgba(0,180,255,0.4)] ring-1 ring-primary scale-[1.02]"
-                          : "bg-muted/40 text-muted-foreground border-border/70 hover:border-primary/50 hover:text-foreground",
+                          : "bg-white/[0.04] text-muted-foreground border-white/10 hover:border-white/20 hover:text-foreground hover:bg-white/[0.08]",
                       )}
                     >
                       <Gamepad2 className="w-3.5 h-3.5" />
@@ -970,26 +970,26 @@ export function ControlsModal({
             </div>
 
             {/* 2. 1-Click Instant Presets Bar */}
-            <div className="p-2.5 rounded-xl bg-muted/40 border border-border/70 space-y-1.5">
+            <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/10 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
-                  <Zap className="w-3 h-3 text-yellow-400" /> 1-Click Instant Keyboard Presets:
+                <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-yellow-400" /> 1-Click Instant Keyboard Presets:
                 </span>
                 {toastMessage && (
                   <span className="text-[11px] font-bold text-emerald-400 animate-in fade-in flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3" /> {toastMessage}
+                    <CheckCircle2 className="w-3.5 h-3.5" /> {toastMessage}
                   </span>
                 )}
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   onClick={() => applyPreset(DEFAULT_KEYBOARD_MAPPING, "Arrow Keys")}
-                  className="h-8 text-xs font-semibold border-border hover:border-primary/60 hover:bg-primary/10 gap-1"
+                  className="h-8 text-xs font-semibold rounded-xl border-white/10 hover:border-primary/50 bg-white/[0.02] hover:bg-white/[0.08] gap-1.5"
                 >
-                  <Keyboard className="w-3 h-3 text-cyan-400" />
+                  <Keyboard className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Arrows + Z/X/C</span>
                 </Button>
 
@@ -998,9 +998,9 @@ export function ControlsModal({
                   variant="outline"
                   size="sm"
                   onClick={() => applyPreset(WASD_KEYBOARD_MAPPING, "WASD")}
-                  className="h-8 text-xs font-semibold border-border hover:border-primary/60 hover:bg-primary/10 gap-1"
+                  className="h-8 text-xs font-semibold rounded-xl border-white/10 hover:border-primary/50 bg-white/[0.02] hover:bg-white/[0.08] gap-1.5"
                 >
-                  <Keyboard className="w-3 h-3 text-amber-400" />
+                  <Keyboard className="w-3.5 h-3.5 text-amber-400" />
                   <span>WASD + J/K/L</span>
                 </Button>
 
@@ -1009,9 +1009,9 @@ export function ControlsModal({
                   variant="outline"
                   size="sm"
                   onClick={() => applyPreset(NUMPAD_KEYBOARD_MAPPING, "Numpad")}
-                  className="h-8 text-xs font-semibold border-border hover:border-primary/60 hover:bg-primary/10 gap-1"
+                  className="h-8 text-xs font-semibold rounded-xl border-white/10 hover:border-primary/50 bg-white/[0.02] hover:bg-white/[0.08] gap-1.5"
                 >
-                  <Keyboard className="w-3 h-3 text-purple-400" />
+                  <Keyboard className="w-3.5 h-3.5 text-purple-400" />
                   <span>Numpad 8/4/6/2</span>
                 </Button>
 
@@ -1020,9 +1020,9 @@ export function ControlsModal({
                   variant="ghost"
                   size="sm"
                   onClick={resetAllDefaults}
-                  className="h-8 text-xs text-muted-foreground hover:text-foreground gap-1"
+                  className="h-8 text-xs rounded-xl text-muted-foreground hover:text-foreground hover:bg-white/5 gap-1.5"
                 >
-                  <RotateCcw className="w-3 h-3" />
+                  <RotateCcw className="w-3.5 h-3.5" />
                   <span>Reset Defaults</span>
                 </Button>
               </div>
@@ -1031,14 +1031,14 @@ export function ControlsModal({
 
           {/* 3. Single Unified Step-by-Step Setup Wizard (Keyboard + Mouse + Gamepad) */}
           {isWizardActive ? (
-            <div className="p-4 rounded-2xl border-2 border-primary bg-gradient-to-br from-primary/20 via-card to-accent/20 shadow-[0_0_35px_rgba(0,180,255,0.35)] space-y-3 animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-4 sm:p-5 rounded-2xl border border-primary/50 bg-gradient-to-br from-primary/15 via-card to-accent/15 shadow-[0_0_35px_rgba(0,180,255,0.25)] space-y-3.5 animate-in fade-in zoom-in-95 duration-200">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-primary/30 border border-primary/50 flex items-center justify-center text-primary">
+                  <div className="w-8 h-8 rounded-xl bg-primary/20 border border-primary/40 flex items-center justify-center text-primary">
                     <Wand2 className="w-4 h-4 text-accent animate-pulse" />
                   </div>
                   <div>
-                    <h4 className="text-xs font-bold text-foreground font-display uppercase tracking-wider">
+                    <h4 className="text-xs font-bold text-foreground font-sans uppercase tracking-wider">
                       Unified Setup Wizard · Player {selectedSlot}
                     </h4>
                     <p className="text-[10px] text-muted-foreground font-mono">
@@ -1054,7 +1054,7 @@ export function ControlsModal({
                     size="sm"
                     onClick={prevWizardStep}
                     disabled={wizardStepIndex === 0}
-                    className="h-7 px-2 text-xs font-semibold border-border hover:border-primary/50 gap-1"
+                    className="h-7 px-2.5 rounded-xl text-xs font-semibold border-white/15 hover:border-primary/50 gap-1"
                   >
                     <ChevronLeft className="w-3.5 h-3.5" /> Back
                   </Button>
@@ -1063,7 +1063,7 @@ export function ControlsModal({
                     variant="outline"
                     size="sm"
                     onClick={skipWizardStep}
-                    className="h-7 px-2 text-xs font-semibold border-border hover:border-primary/50 gap-1"
+                    className="h-7 px-2.5 rounded-xl text-xs font-semibold border-white/15 hover:border-primary/50 gap-1"
                   >
                     Skip <ChevronRight className="w-3.5 h-3.5" />
                   </Button>
@@ -1072,7 +1072,7 @@ export function ControlsModal({
                     variant="ghost"
                     size="sm"
                     onClick={cancelWizard}
-                    className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive gap-1"
+                    className="h-7 px-2 text-xs rounded-xl text-muted-foreground hover:text-destructive gap-1"
                     title="Stop Wizard (Esc)"
                   >
                     <X className="w-3.5 h-3.5" /> Stop (Esc)
@@ -1081,26 +1081,26 @@ export function ControlsModal({
               </div>
 
               {/* Progress Bar */}
-              <div className="w-full bg-muted/80 h-2 rounded-full overflow-hidden border border-primary/30">
+              <div className="w-full bg-white/[0.06] h-2 rounded-full overflow-hidden border border-white/10">
                 <div
-                  className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-300"
+                  className="h-full bg-gradient-to-r from-primary via-cyan-400 to-accent transition-all duration-300"
                   style={{ width: `${((wizardStepIndex + 1) / actions.length) * 100}%` }}
                 />
               </div>
 
               {/* Huge Action Prompt Card */}
-              <div className="py-3 px-4 rounded-xl bg-background/95 border border-primary/50 flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="py-3.5 px-4 rounded-xl bg-background/95 border border-white/10 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
                 <div className="space-y-1 text-center md:text-left">
                   <span className="text-[10px] uppercase font-bold tracking-widest text-primary flex items-center justify-center md:justify-start gap-1">
                     <Sparkles className="w-3 h-3 text-accent" />
                     Press Desired Input for:
                   </span>
                   <div className="flex items-center justify-center md:justify-start gap-2">
-                    <span className="text-2xl sm:text-3xl font-black text-foreground font-display tracking-wide uppercase">
+                    <span className="text-2xl sm:text-3xl font-black text-foreground font-sans tracking-tight uppercase">
                       {currentWizardAction.label}
                     </span>
                     {currentWizardAction.shortLabel && (
-                      <Badge className="bg-primary/20 text-primary border-primary/40 font-mono text-base px-2 py-0.5">
+                      <Badge className="bg-primary/20 text-primary border-primary/40 font-mono text-base px-2 py-0.5 rounded-lg">
                         {currentWizardAction.shortLabel}
                       </Badge>
                     )}
@@ -1112,13 +1112,13 @@ export function ControlsModal({
 
                 <div className="flex flex-col items-center md:items-end gap-2 shrink-0">
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-xs font-mono py-1 px-2.5 border-primary/40 bg-card">
+                    <Badge variant="outline" className="text-xs font-mono py-1 px-2.5 rounded-xl border-white/15 bg-white/[0.04]">
                       Keyboard/Mouse:{" "}
                       <strong className="text-cyan-400 ml-1">
                         {formatBindingLabel(kbMapping[currentWizardAction.id])}
                       </strong>
                     </Badge>
-                    <Badge variant="outline" className="text-xs font-mono py-1 px-2.5 border-primary/40 bg-card">
+                    <Badge variant="outline" className="text-xs font-mono py-1 px-2.5 rounded-xl border-white/15 bg-white/[0.04]">
                       Gamepad:{" "}
                       <strong className="text-amber-400 ml-1">
                         {formatGamepadBinding(currentWizardAction.id)}
@@ -1129,7 +1129,7 @@ export function ControlsModal({
                   {wizardJustMapped && (
                     <Badge
                       variant="outline"
-                      className="text-xs font-mono py-1 px-2.5 border-emerald-500/50 bg-emerald-500/10 text-emerald-400 animate-in fade-in"
+                      className="text-xs font-mono py-1 px-2.5 rounded-xl border-emerald-500/40 bg-emerald-500/10 text-emerald-400 animate-in fade-in"
                     >
                       <CheckCircle2 className="w-3 h-3 mr-1" /> Mapped: {wizardJustMapped}
                     </Badge>
@@ -1148,7 +1148,7 @@ export function ControlsModal({
                   e.preventDefault();
                   e.stopPropagation();
                 }}
-                className="w-full p-2.5 rounded-xl border-2 border-dashed border-accent/60 bg-accent/10 hover:bg-accent/20 cursor-pointer flex items-center justify-center gap-2 text-accent font-bold text-xs transition-all hover:scale-[1.01] select-none shadow-sm"
+                className="w-full p-3 rounded-xl border-2 border-dashed border-accent/60 bg-accent/10 hover:bg-accent/20 cursor-pointer flex items-center justify-center gap-2 text-accent font-bold text-xs transition-all hover:scale-[1.01] select-none shadow-sm"
                 title="Click with ANY mouse button (Left, Right, Middle, Back, Forward) to bind"
               >
                 <Mouse className="w-4 h-4 text-accent animate-bounce" />
@@ -1157,9 +1157,9 @@ export function ControlsModal({
             </div>
           ) : (
             /* Unified Wizard Launch Banner */
-            <div className="p-3.5 rounded-2xl border border-primary/40 bg-gradient-to-r from-primary/10 via-card to-accent/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+            <div className="p-4 rounded-2xl border border-white/15 bg-gradient-to-r from-primary/10 via-card to-accent/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 shadow-lg">
               <div className="space-y-0.5">
-                <h4 className="text-sm font-bold text-foreground flex items-center gap-1.5 font-display">
+                <h4 className="text-sm font-bold text-foreground flex items-center gap-1.5 font-sans">
                   <Wand2 className="w-4 h-4 text-accent animate-pulse" /> Unified Setup Wizard
                 </h4>
                 <p className="text-xs text-muted-foreground">
@@ -1171,7 +1171,7 @@ export function ControlsModal({
                 type="button"
                 size="sm"
                 onClick={startWizard}
-                className="h-9 px-4 text-xs font-extrabold bg-gradient-to-r from-primary via-primary to-accent hover:from-primary/90 hover:to-accent/90 text-primary-foreground gap-2 shadow-[0_0_20px_rgba(0,180,255,0.4)] animate-pulse hover:animate-none hover:scale-105 transition-all"
+                className="h-9 px-4 text-xs font-extrabold rounded-xl bg-gradient-to-r from-primary via-primary to-accent hover:from-primary/90 hover:to-accent/90 text-primary-foreground gap-2 shadow-[0_0_20px_rgba(0,180,255,0.4)] animate-pulse hover:animate-none hover:scale-105 transition-all"
               >
                 <Zap className="w-4 h-4 text-yellow-300 fill-yellow-300" />
                 <span>Start Interactive Keybind Wizard (Keyboard, Mouse, or Controller)</span>
@@ -1180,7 +1180,7 @@ export function ControlsModal({
           )}
 
           {wizardCompleted && (
-            <div className="p-3 rounded-xl border border-emerald-500/50 bg-emerald-500/10 text-emerald-300 text-xs flex items-center justify-between gap-2 shadow-[0_0_15px_rgba(16,185,129,0.2)]">
+            <div className="p-3.5 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-xs flex items-center justify-between gap-2 shadow-[0_0_15px_rgba(16,185,129,0.15)]">
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span>
@@ -1192,7 +1192,7 @@ export function ControlsModal({
                 variant="ghost"
                 size="sm"
                 onClick={() => setWizardCompleted(false)}
-                className="h-6 text-xs text-emerald-400 hover:bg-emerald-500/20"
+                className="h-6 text-xs rounded-lg text-emerald-400 hover:bg-emerald-500/20"
               >
                 Dismiss
               </Button>
@@ -1201,13 +1201,13 @@ export function ControlsModal({
 
           {/* Active Single-Button Rebinding Helper Card */}
           {listeningActionId && (
-            <div className="p-3 rounded-xl border-2 border-accent bg-accent/15 text-accent-foreground flex flex-col sm:flex-row items-center justify-between gap-3 shadow-[0_0_20px_rgba(224,0,11,0.4)] animate-in fade-in zoom-in-95">
+            <div className="p-3.5 rounded-2xl border border-accent/60 bg-accent/10 text-accent-foreground flex flex-col sm:flex-row items-center justify-between gap-3 shadow-[0_0_20px_rgba(224,0,11,0.25)] animate-in fade-in zoom-in-95">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-accent/30 flex items-center justify-center font-bold text-accent">
+                <div className="w-8 h-8 rounded-xl bg-accent/20 flex items-center justify-center font-bold text-accent">
                   <Sparkles className="w-4 h-4 animate-spin" />
                 </div>
                 <div>
-                  <p className="text-xs font-bold font-display uppercase tracking-wider">
+                  <p className="text-xs font-bold font-sans uppercase tracking-wider">
                     Rebinding: {actions.find((a) => a.id === listeningActionId)?.label || listeningActionId}
                   </p>
                   <p className="text-[11px] text-muted-foreground">
@@ -1226,7 +1226,7 @@ export function ControlsModal({
                     e.preventDefault();
                     e.stopPropagation();
                   }}
-                  className="px-3 py-1.5 rounded-lg border-2 border-dashed border-accent bg-background/80 hover:bg-accent/20 cursor-pointer text-xs font-bold text-accent flex items-center gap-1.5 shadow-sm"
+                  className="px-3 py-1.5 rounded-xl border-2 border-dashed border-accent bg-background/80 hover:bg-accent/20 cursor-pointer text-xs font-bold text-accent flex items-center gap-1.5 shadow-sm"
                 >
                   <Mouse className="w-3.5 h-3.5" />
                   <span>Click to Bind Mouse</span>
@@ -1236,7 +1236,7 @@ export function ControlsModal({
                   size="sm"
                   variant="ghost"
                   onClick={() => setListeningActionId(null)}
-                  className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                  className="h-8 px-2 text-xs rounded-xl text-muted-foreground hover:text-foreground"
                 >
                   Cancel (Esc)
                 </Button>
@@ -1245,7 +1245,7 @@ export function ControlsModal({
           )}
 
           {/* 4. Interactive Visual Live Test Gamepad */}
-          <div className="p-4 rounded-2xl border-2 border-border/80 bg-neutral-950/80 shadow-inner relative overflow-hidden space-y-3">
+          <div className="p-4 sm:p-5 rounded-2xl border border-white/15 bg-neutral-950/90 shadow-inner relative overflow-hidden space-y-3.5">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="relative flex h-2 w-2">
@@ -1287,7 +1287,7 @@ export function ControlsModal({
             </div>
 
             {/* Graphical Gamepad Chassis: Dynamically Adapts to Console */}
-            <div className="w-full max-w-xl mx-auto p-4 rounded-3xl bg-neutral-900/90 border border-neutral-700/80 shadow-2xl relative select-none">
+            <div className="w-full max-w-xl mx-auto p-4 sm:p-5 rounded-3xl bg-neutral-900/90 border border-white/10 shadow-2xl relative select-none">
               {/* Top Shoulder Triggers */}
               <div className="flex justify-between items-center px-4 mb-3 gap-2">
                 {normCore === "n64" ? (
@@ -1447,9 +1447,9 @@ export function ControlsModal({
           </div>
 
           {/* 5. Direct Button Rebinding List */}
-          <div className="space-y-2 pt-1 border-t border-border/50">
+          <div className="space-y-2.5 pt-2 border-t border-white/10">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1">
+              <span className="text-xs font-bold text-muted-foreground uppercase flex items-center gap-1.5">
                 <Sliders className="w-3.5 h-3.5 text-primary" /> All Actions & Key Bindings:
               </span>
               <span className="text-[10px] font-mono text-muted-foreground">
@@ -1470,14 +1470,14 @@ export function ControlsModal({
                   <div
                     key={actionName}
                     className={cn(
-                      "flex items-center justify-between p-2 rounded-xl border transition-all",
+                      "flex items-center justify-between p-2.5 rounded-xl border transition-all",
                       isLit
                         ? "border-emerald-400 bg-emerald-500/10 shadow-[0_0_12px_rgba(16,185,129,0.3)]"
                         : isWizardTarget
                         ? "border-amber-400 bg-amber-500/15 ring-2 ring-amber-400"
                         : isListening
                         ? "border-accent bg-accent/15 ring-2 ring-accent"
-                        : "border-border/60 bg-muted/20 hover:border-border",
+                        : "border-white/10 bg-white/[0.02] hover:bg-white/[0.05]",
                     )}
                   >
                     <div className="flex items-center gap-2 min-w-0">
@@ -1513,7 +1513,7 @@ export function ControlsModal({
                             size="sm"
                             variant="destructive"
                             onClick={() => setListeningActionId(null)}
-                            className="h-7 px-2 text-xs font-bold"
+                            className="h-7 px-2.5 text-xs font-bold rounded-lg"
                           >
                             Cancel
                           </Button>
@@ -1524,7 +1524,7 @@ export function ControlsModal({
                           size="sm"
                           variant="outline"
                           onClick={() => startSingleRebind(actionName)}
-                          className="h-7 px-2 text-xs font-semibold border-border hover:border-primary/60 hover:bg-primary/10"
+                          className="h-7 px-2.5 text-xs font-semibold rounded-lg border-white/15 hover:border-primary/60 hover:bg-primary/10"
                         >
                           Rebind
                         </Button>

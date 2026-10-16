@@ -553,12 +553,12 @@ export function ConsoleShowcase({
   return (
     <div className={cn("space-y-3 font-sans", className)}>
       <div className="flex items-center justify-between">
-        <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+        <label className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
           <Gamepad2 className="w-3.5 h-3.5 text-primary" />
           Choose Emulation Platform
         </label>
         {detectedCore && (
-          <span className="text-[10px] font-sans font-bold text-accent flex items-center gap-1">
+          <span className="text-[11px] font-sans font-medium text-emerald-400 flex items-center gap-1 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
             <Sparkles className="w-3 h-3" /> Auto-detected: {getConsoleSystem(detectedCore).shortName}
           </span>
         )}
@@ -578,18 +578,18 @@ export function ConsoleShowcase({
               type="button"
               onClick={() => onSelectCore(coreId)}
               style={{
-                boxShadow: isSelected ? `0 0 20px ${meta.accentGlow}` : undefined,
+                boxShadow: isSelected ? `0 0 24px ${meta.accentGlow}, inset 0 1px 0 rgba(255,255,255,0.1)` : undefined,
               }}
               className={cn(
-                "group relative p-2.5 rounded-xl border text-left transition-all duration-200 flex flex-col justify-between overflow-hidden",
+                "group relative p-3 rounded-2xl border text-left transition-all duration-200 flex flex-col justify-between overflow-hidden",
                 isSelected
-                  ? "border-primary bg-card/90 ring-2 ring-primary scale-[1.02]"
-                  : "border-border/70 bg-card/40 hover:border-primary/50 hover:bg-card/70 hover:scale-[1.01]",
+                  ? "border-primary bg-card/90 ring-2 ring-primary/40 shadow-lg scale-[1.02]"
+                  : "border-white/10 bg-card/60 hover:border-white/20 hover:bg-white/[0.04] hover:scale-[1.01]",
               )}
             >
               {/* Subtle Ambient Glow Pill */}
               <div
-                className="absolute -top-8 -right-8 w-16 h-16 rounded-full blur-xl opacity-30 pointer-events-none transition-opacity group-hover:opacity-60"
+                className="absolute -top-8 -right-8 w-16 h-16 rounded-full blur-xl opacity-25 pointer-events-none transition-opacity group-hover:opacity-60"
                 style={{ backgroundColor: meta.accentGlow }}
               />
 
@@ -597,12 +597,12 @@ export function ConsoleShowcase({
               <div className="flex items-center justify-between w-full mb-1 z-10">
                 <Badge
                   variant="outline"
-                  className={cn("text-[9px] font-bold py-0 px-1 uppercase tracking-wider", sys.badgeColor)}
+                  className={cn("text-[9px] font-semibold py-0 px-1.5 rounded-md", sys.badgeColor)}
                 >
                   {sys.shortName}
                 </Badge>
                 {isDetected ? (
-                  <span className="text-[9px] text-accent font-bold font-mono flex items-center gap-0.5">
+                  <span className="text-[9px] text-emerald-400 font-medium flex items-center gap-0.5">
                     <Sparkles className="w-2.5 h-2.5" /> Auto
                   </span>
                 ) : isSelected ? (
@@ -617,10 +617,10 @@ export function ConsoleShowcase({
 
               {/* Title & Generation Info */}
               <div className="space-y-0.5 z-10">
-                <h4 className="text-xs font-bold text-foreground truncate font-display tracking-wide">
+                <h4 className="text-xs font-semibold text-foreground truncate font-display tracking-tight">
                   {sys.shortName}
                 </h4>
-                <p className="text-[9px] text-muted-foreground font-mono truncate">
+                <p className="text-[10px] text-muted-foreground truncate">
                   {meta.generation}
                 </p>
               </div>
@@ -631,7 +631,7 @@ export function ConsoleShowcase({
 
       {/* Quick Select for Additional Platforms (NES, Sega CD, GB, etc.) */}
       <div className="flex items-center gap-1.5 flex-wrap pt-1 text-[11px] text-muted-foreground">
-        <span className="text-[10px] uppercase font-bold text-muted-foreground/80 tracking-wider mr-1">
+        <span className="text-[11px] font-medium text-muted-foreground mr-1">
           Other Systems:
         </span>
         {SUPPORTED_CONSOLES.filter((c) => !FEATURED_CONSOLE_IDS.includes(c.id)).map((c) => {
@@ -642,10 +642,10 @@ export function ConsoleShowcase({
               type="button"
               onClick={() => onSelectCore(c.id)}
               className={cn(
-                "px-2 py-0.5 rounded-full border text-[10px] font-bold font-mono uppercase transition-all",
+                "px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-all",
                 isSelected
-                  ? "bg-primary text-primary-foreground border-primary shadow-[0_0_10px_rgba(0,71,187,0.4)]"
-                  : "bg-muted/40 text-muted-foreground border-border hover:border-primary/40 hover:text-foreground",
+                  ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                  : "bg-white/5 text-muted-foreground border-white/10 hover:border-white/20 hover:text-foreground hover:bg-white/10",
               )}
             >
               {c.name}

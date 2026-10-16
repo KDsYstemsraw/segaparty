@@ -377,13 +377,10 @@ export function RomDropzone({
           <div
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
-            className="relative p-4 sm:p-5 rounded-2xl border-2 border-primary/70 bg-gradient-to-br from-card/95 via-card/85 to-primary/10 shadow-[0_0_30px_rgba(0,71,187,0.3)] backdrop-blur-md overflow-hidden transition-all duration-300 flex flex-col md:flex-row items-center justify-between gap-5"
+            className="relative p-5 rounded-2xl border border-white/10 bg-gradient-to-br from-card via-card/90 to-primary/5 shadow-xl backdrop-blur-md overflow-hidden transition-all duration-300 flex flex-col md:flex-row items-center justify-between gap-5"
           >
-            {/* Cyberpunk corner accent notches */}
-            <div className="absolute top-0 left-0 w-3 h-3 border-t-2 border-l-2 border-primary" />
-            <div className="absolute top-0 right-0 w-3 h-3 border-t-2 border-r-2 border-primary" />
-            <div className="absolute bottom-0 left-0 w-3 h-3 border-b-2 border-l-2 border-primary" />
-            <div className="absolute bottom-0 right-0 w-3 h-3 border-b-2 border-r-2 border-primary" />
+            {/* Subtle ambient accent glow */}
+            <div className="absolute -top-12 -right-12 w-32 h-32 rounded-full bg-primary/10 blur-2xl pointer-events-none" />
 
             {/* Media Hologram (Disc or Cartridge) */}
             <div className="shrink-0 flex items-center justify-center">
@@ -409,7 +406,7 @@ export function RomDropzone({
                 <Badge
                   variant="outline"
                   className={cn(
-                    "text-[10px] font-bold py-0.5 px-2 uppercase tracking-wider shadow-sm",
+                    "text-[10px] font-bold py-0.5 px-2.5 uppercase tracking-wide rounded-md shadow-sm",
                     activeSystem.badgeColor,
                   )}
                 >
@@ -418,42 +415,42 @@ export function RomDropzone({
 
                 <Badge
                   variant="outline"
-                  className="text-[10px] py-0.5 px-2 border-primary/50 text-primary font-mono bg-primary/10"
+                  className="text-[10px] py-0.5 px-2.5 border-white/10 text-white font-medium bg-white/5 rounded-md"
                 >
-                  {isDisc ? "OPTICAL DISC" : "SOLID STATE CARTRIDGE"}
+                  {isDisc ? "Optical Disc" : "Game Cartridge"}
                 </Badge>
 
                 <Badge
                   variant="outline"
-                  className="text-[10px] py-0.5 px-2 border-border text-muted-foreground font-mono"
+                  className="text-[10px] py-0.5 px-2.5 border-white/10 text-muted-foreground font-mono rounded-md"
                 >
                   {formatBytes(selectedFile.size)}
                 </Badge>
 
-                <span className="text-[10px] text-emerald-400 font-mono font-bold flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-400" /> READY
+                <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Ready to Play
                 </span>
               </div>
 
               <div>
                 <h3
-                  className="text-base sm:text-lg font-black text-foreground font-display tracking-wide truncate max-w-md"
+                  className="text-base sm:text-lg font-bold text-white tracking-tight truncate max-w-md font-display"
                   title={cleanTitle}
                 >
                   {cleanTitle}
                 </h3>
                 <p
-                  className="text-xs font-mono text-muted-foreground truncate max-w-sm sm:max-w-md mt-0.5"
+                  className="text-xs font-mono text-muted-foreground/80 truncate max-w-sm sm:max-w-md mt-0.5"
                   title={selectedFile.name}
                 >
                   {selectedFile.name}
                 </p>
               </div>
 
-              <p className="text-[11px] text-muted-foreground/80 font-sans">
+              <p className="text-xs text-muted-foreground font-sans">
                 {isDisc
-                  ? "Laser optics focused · Audio & data tracks verified"
-                  : "Cartridge seated firmly in deck · Bus contacts active"}
+                  ? "Optical disc verified · Ready for emulation"
+                  : "Cartridge verified · Ready for emulation"}
               </p>
             </div>
 
@@ -464,16 +461,16 @@ export function RomDropzone({
                 size="sm"
                 variant="outline"
                 onClick={triggerPicker}
-                className="w-full sm:w-auto h-9 px-3.5 text-xs font-bold border-primary/50 text-primary hover:bg-primary hover:text-primary-foreground gap-1.5 shadow-sm"
+                className="w-full sm:w-auto h-9 px-3.5 text-xs font-semibold rounded-xl border-white/10 bg-white/5 hover:bg-white/10 text-white gap-1.5 shadow-sm"
               >
-                <FolderOpen className="w-3.5 h-3.5" /> Swap ROM
+                <FolderOpen className="w-3.5 h-3.5 text-primary" /> Change Game
               </Button>
               <Button
                 type="button"
                 size="sm"
                 variant="ghost"
                 onClick={() => onFileSelected(null)}
-                className="w-full sm:w-auto h-9 px-3.5 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 gap-1.5"
+                className="w-full sm:w-auto h-9 px-3.5 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl gap-1.5"
                 title="Eject ROM"
               >
                 <X className="w-3.5 h-3.5" /> Eject
@@ -498,7 +495,7 @@ export function RomDropzone({
         </div>
       ) : (
         /* ================================================================= */
-        /* EMPTY / IDLE HOLOGRAPHIC DROPZONE                                 */
+        /* EMPTY / IDLE DROPZONE                                             */
         /* ================================================================= */
         <div
           onDragOver={handleDragOver}
@@ -511,27 +508,21 @@ export function RomDropzone({
             "group relative w-full rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer flex flex-col items-center justify-center p-6 text-center overflow-hidden",
             compact ? "h-36" : "h-52",
             isDragging
-              ? "border-accent bg-accent/15 scale-[1.01] shadow-[0_0_30px_rgba(224,0,11,0.4)]"
-              : "border-primary/40 bg-card/40 hover:border-primary hover:bg-primary/5 hover:shadow-[0_0_25px_rgba(0,71,187,0.25)]",
+              ? "border-primary bg-primary/10 scale-[1.01] shadow-xl shadow-primary/10"
+              : "border-white/15 bg-card/60 hover:border-primary/50 hover:bg-white/[0.02] hover:shadow-xl",
           )}
         >
-          {/* Subtle cybernetic corner bracket notches */}
-          <div className="absolute top-2 left-2 w-3 h-3 border-t-2 border-l-2 border-primary/50 group-hover:border-primary transition-colors" />
-          <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 border-primary/50 group-hover:border-primary transition-colors" />
-          <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 border-primary/50 group-hover:border-primary transition-colors" />
-          <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-primary/50 group-hover:border-primary transition-colors" />
-
           {/* Hologram Media Preview Badge */}
           <div className="relative mb-3 flex items-center justify-center">
             {/* Ambient pulse halo */}
             <div
               className={cn(
-                "absolute w-16 h-16 rounded-full blur-lg transition-all duration-300",
+                "absolute w-16 h-16 rounded-full blur-xl transition-all duration-300",
                 isDragging
-                  ? "bg-accent/40 scale-125"
+                  ? "bg-primary/40 scale-125"
                   : isHovered
-                  ? "bg-primary/30 scale-110"
-                  : "bg-primary/15",
+                  ? "bg-primary/25 scale-110"
+                  : "bg-primary/10",
               )}
             />
 
@@ -539,57 +530,57 @@ export function RomDropzone({
               className={cn(
                 "relative w-14 h-14 rounded-2xl border flex items-center justify-center transition-all duration-300",
                 isDragging
-                  ? "border-accent bg-accent/20 text-accent scale-110"
-                  : "border-primary/40 bg-primary/10 text-primary group-hover:border-primary group-hover:scale-105 group-hover:shadow-[0_0_15px_rgba(0,71,187,0.3)]",
+                  ? "border-primary bg-primary/20 text-primary scale-110"
+                  : "border-white/10 bg-white/5 text-primary group-hover:border-primary/50 group-hover:scale-105 group-hover:bg-primary/10",
               )}
             >
               {isDisc ? (
                 <Disc className="w-7 h-7 text-primary animate-[spin_8s_linear_infinite]" />
               ) : (
-                <HardDrive className="w-7 h-7 text-primary group-hover:animate-bounce" />
+                <HardDrive className="w-7 h-7 text-primary" />
               )}
             </div>
           </div>
 
           {/* Instructions */}
-          <div className="space-y-1 mb-2.5 z-10">
-            <h4 className="font-display font-bold text-sm sm:text-base text-foreground tracking-wide flex items-center justify-center gap-1.5">
+          <div className="space-y-1 mb-3 z-10">
+            <h4 className="font-display font-bold text-sm sm:text-base text-white tracking-tight flex items-center justify-center gap-1.5">
               <span>
                 {isDragging
-                  ? "Drop ROM to Load Into Console Deck"
+                  ? "Release to Load Game File"
                   : isDisc
                   ? "Insert Disc / Drop CD-ROM Image"
-                  : "Insert Cartridge / Drop ROM File"}
+                  : "Insert Cartridge / Drop Game File"}
               </span>
             </h4>
             <p className="text-xs text-muted-foreground font-sans max-w-md">
-              Drag & drop any supported game file here, or click anywhere to browse local files
+              Drag & drop any supported game file here, or click to browse local files
             </p>
           </div>
 
           {/* Formats Pills */}
           <div className="flex items-center gap-1.5 flex-wrap justify-center text-[10px] font-mono text-muted-foreground z-10">
-            <Badge variant="outline" className="text-[9px] py-0 px-1.5 border-border/80 bg-background/50">
+            <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/5 text-muted-foreground">
               .CHD
-            </Badge>
-            <Badge variant="outline" className="text-[9px] py-0 px-1.5 border-border/80 bg-background/50">
+            </span>
+            <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/5 text-muted-foreground">
               .BIN
-            </Badge>
-            <Badge variant="outline" className="text-[9px] py-0 px-1.5 border-border/80 bg-background/50">
+            </span>
+            <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/5 text-muted-foreground">
               .MD
-            </Badge>
-            <Badge variant="outline" className="text-[9px] py-0 px-1.5 border-border/80 bg-background/50">
+            </span>
+            <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/5 text-muted-foreground">
               .SFC
-            </Badge>
-            <Badge variant="outline" className="text-[9px] py-0 px-1.5 border-border/80 bg-background/50">
+            </span>
+            <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/5 text-muted-foreground">
               .Z64
-            </Badge>
-            <Badge variant="outline" className="text-[9px] py-0 px-1.5 border-border/80 bg-background/50">
+            </span>
+            <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/5 text-muted-foreground">
               .GBA
-            </Badge>
-            <Badge variant="outline" className="text-[9px] py-0 px-1.5 border-border/80 bg-background/50">
+            </span>
+            <span className="px-2 py-0.5 rounded-md border border-white/10 bg-white/5 text-muted-foreground">
               .ZIP
-            </Badge>
+            </span>
           </div>
         </div>
       )}

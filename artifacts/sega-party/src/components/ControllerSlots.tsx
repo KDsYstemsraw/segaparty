@@ -8,10 +8,10 @@ import {
   UserX,
   Hand,
   MoreVertical,
-  Coins,
-  Zap,
-  Radio,
+  Plus,
   Settings2,
+  Radio,
+  Sliders,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -30,7 +30,7 @@ import {
 import type { SlotState, ParticipantInfo } from "@/lib/webrtc";
 import { cn } from "@/lib/utils";
 
-interface ControllerSlotsProps {
+export interface ControllerSlotsProps {
   slots: SlotState;
   myPeerId: string;
   isHost: boolean;
@@ -48,60 +48,55 @@ interface ControllerSlotsProps {
 const SLOT_CONFIGS: Record<
   number,
   {
-    upTag: string;
-    name: string;
+    tag: string;
+    label: string;
     color: string;
     border: string;
     bg: string;
     glow: string;
-    badgeBg: string;
-    neonColor: string;
-    accentHex: string;
+    pillBg: string;
+    dotColor: string;
   }
 > = {
   1: {
-    upTag: "1UP",
-    name: "Player 1",
+    tag: "P1",
+    label: "Player 1",
     color: "text-cyan-400",
-    border: "border-cyan-500/70 hover:border-cyan-400",
-    bg: "bg-cyan-950/30",
-    glow: "shadow-[0_0_22px_rgba(6,182,212,0.3)]",
-    badgeBg: "bg-cyan-500/20 text-cyan-300 border-cyan-400/50",
-    neonColor: "bg-cyan-400",
-    accentHex: "#06b6d4",
+    border: "border-cyan-500/35 hover:border-cyan-400/60",
+    bg: "bg-cyan-950/20",
+    glow: "shadow-[0_0_20px_rgba(6,182,212,0.15)]",
+    pillBg: "bg-cyan-500/20 text-cyan-300 border-cyan-400/40",
+    dotColor: "bg-cyan-400",
   },
   2: {
-    upTag: "2UP",
-    name: "Player 2",
-    color: "text-red-400",
-    border: "border-red-500/70 hover:border-red-400",
-    bg: "bg-red-950/30",
-    glow: "shadow-[0_0_22px_rgba(239,68,68,0.3)]",
-    badgeBg: "bg-red-500/20 text-red-300 border-red-400/50",
-    neonColor: "bg-red-400",
-    accentHex: "#ef4444",
+    tag: "P2",
+    label: "Player 2",
+    color: "text-rose-400",
+    border: "border-rose-500/35 hover:border-rose-400/60",
+    bg: "bg-rose-950/20",
+    glow: "shadow-[0_0_20px_rgba(244,63,94,0.15)]",
+    pillBg: "bg-rose-500/20 text-rose-300 border-rose-400/40",
+    dotColor: "bg-rose-400",
   },
   3: {
-    upTag: "3UP",
-    name: "Player 3",
+    tag: "P3",
+    label: "Player 3",
     color: "text-amber-400",
-    border: "border-amber-500/70 hover:border-amber-400",
-    bg: "bg-amber-950/30",
-    glow: "shadow-[0_0_22px_rgba(245,158,11,0.3)]",
-    badgeBg: "bg-amber-500/20 text-amber-300 border-amber-400/50",
-    neonColor: "bg-amber-400",
-    accentHex: "#f59e0b",
+    border: "border-amber-500/35 hover:border-amber-400/60",
+    bg: "bg-amber-950/20",
+    glow: "shadow-[0_0_20px_rgba(245,158,11,0.15)]",
+    pillBg: "bg-amber-500/20 text-amber-300 border-amber-400/40",
+    dotColor: "bg-amber-400",
   },
   4: {
-    upTag: "4UP",
-    name: "Player 4",
+    tag: "P4",
+    label: "Player 4",
     color: "text-emerald-400",
-    border: "border-emerald-500/70 hover:border-emerald-400",
-    bg: "bg-emerald-950/30",
-    glow: "shadow-[0_0_22px_rgba(16,185,129,0.3)]",
-    badgeBg: "bg-emerald-500/20 text-emerald-300 border-emerald-400/50",
-    neonColor: "bg-emerald-400",
-    accentHex: "#10b981",
+    border: "border-emerald-500/35 hover:border-emerald-400/60",
+    bg: "bg-emerald-950/20",
+    glow: "shadow-[0_0_20px_rgba(16,185,129,0.15)]",
+    pillBg: "bg-emerald-500/20 text-emerald-300 border-emerald-400/40",
+    dotColor: "bg-emerald-400",
   },
 };
 
@@ -116,8 +111,6 @@ const BUTTON_INDICATORS = [
   { id: "x", label: "X" },
   { id: "y", label: "Y" },
   { id: "z", label: "Z" },
-  { id: "start", label: "STA" },
-  { id: "mode", label: "MOD" },
 ];
 
 export function ControllerSlots({
@@ -139,27 +132,36 @@ export function ControllerSlots({
   );
 
   return (
-    <div className="w-full space-y-2 font-sans">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Gamepad2 className="w-4 h-4 text-accent animate-pulse" />
-          <h3 className="font-display text-sm tracking-widest text-primary uppercase font-bold flex items-center gap-2">
-            Arcade Player Deck
-            <span className="text-[10px] font-mono text-muted-foreground bg-muted/40 px-1.5 py-0.5 rounded border border-border">
-              4-PLAYER LIVE
-            </span>
-          </h3>
+    <div className="w-full space-y-3 font-sans">
+      {/* 1. Clean Consumer Section Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-0.5">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-white/[0.06] border border-white/10 flex items-center justify-center text-primary shadow-sm">
+            <Gamepad2 className="w-4 h-4 text-primary animate-pulse" />
+          </div>
+          <div>
+            <h3 className="font-sans font-extrabold text-sm tracking-tight text-foreground flex items-center gap-2">
+              Controllers & Players
+              <Badge variant="outline" className="text-[10px] font-mono py-0 px-2 rounded-full border-white/15 bg-white/[0.03] text-muted-foreground font-semibold">
+                Up to 4 Players
+              </Badge>
+            </h3>
+            <p className="text-[11px] text-muted-foreground/80">
+              Pick a controller slot to jump into the game with Keyboard, Mouse, or Gamepad.
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {onOpenControls && (
             <Button
               size="sm"
-              variant="outline"
+              variant="default"
               onClick={() => onOpenControls(mySlot || undefined)}
-              className="h-7 text-xs border-primary/50 text-primary hover:bg-primary hover:text-primary-foreground font-bold gap-1"
+              className="h-8 px-3 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl shadow-sm shadow-primary/30 flex items-center gap-1.5 transition-all hover:scale-[1.02]"
             >
-              <Settings2 className="w-3.5 h-3.5" /> Controls Setup Wizard
+              <Settings2 className="w-3.5 h-3.5" />
+              <span>Keybind & Controller Setup</span>
             </Button>
           )}
 
@@ -168,16 +170,17 @@ export function ControllerSlots({
               size="sm"
               variant="outline"
               onClick={() => onReleaseSlot(mySlot)}
-              className="h-7 text-xs border-muted-foreground/30 text-muted-foreground hover:text-destructive hover:border-destructive font-sans gap-1"
+              className="h-8 px-3 text-xs rounded-xl border-white/15 text-muted-foreground hover:text-destructive hover:border-destructive/40 hover:bg-destructive/10 font-medium transition-colors gap-1.5"
             >
-              <UserX className="w-3 h-3" /> Leave Player {mySlot} (Spectate)
+              <UserX className="w-3.5 h-3.5" />
+              <span>Switch to Spectator</span>
             </Button>
           )}
         </div>
       </div>
 
-      {/* Compact Player Slot Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+      {/* 2. Sleek 4-Player Consumer Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {[1, 2, 3, 4].map((slotNum) => {
           const cfg = SLOT_CONFIGS[slotNum];
           const holder = slots[slotNum];
@@ -188,249 +191,230 @@ export function ControllerSlots({
             <Card
               key={slotNum}
               className={cn(
-                "border transition-all relative overflow-hidden backdrop-blur-sm",
+                "rounded-2xl transition-all duration-200 relative overflow-hidden backdrop-blur-md flex flex-col justify-between",
                 isOccupied
-                  ? cn(cfg.border, cfg.bg, cfg.glow)
-                  : "border-dashed border-border/70 bg-card/40 hover:border-primary/50"
+                  ? cn(cfg.border, cfg.bg, cfg.glow, "border shadow-lg")
+                  : "border-dashed border-white/15 bg-white/[0.02] hover:bg-white/[0.04] hover:border-white/25 shadow-sm"
               )}
             >
-              <CardContent className="p-2.5 flex flex-col justify-between h-full space-y-2">
-                {/* Header: Player Tag (1UP..4UP) & Status Orb */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
+              <CardContent className="p-3.5 flex flex-col justify-between h-full space-y-3">
+                {/* Top Row: Slot Pill, Player Display Name, Status Badges & Menu */}
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-2 min-w-0">
                     <span
                       className={cn(
-                        "font-display font-black text-xs px-1.5 py-0 rounded border tracking-wider bg-background/90 shadow-sm",
-                        cfg.color,
-                        cfg.border
+                        "font-sans font-black text-[11px] px-2 py-0.5 rounded-full border tracking-wide uppercase shrink-0 shadow-sm",
+                        isOccupied ? cfg.pillBg : "bg-white/5 text-muted-foreground border-white/10"
                       )}
                     >
-                      {cfg.upTag}
+                      {cfg.tag}
                     </span>
-                    <span className="font-sans font-bold text-[11px] uppercase tracking-wider text-foreground">
-                      {cfg.name}
+
+                    <span className="font-sans font-bold text-xs truncate text-foreground">
+                      {isOccupied ? holder.playerName : `Controller ${slotNum}`}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 shrink-0">
                     {isOccupied ? (
                       <>
-                        {/* Glowing Online Status Orb */}
-                        <span className="relative flex h-2 w-2 mr-0.5">
-                          <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", cfg.neonColor)} />
-                          <span className={cn("relative inline-flex rounded-full h-2 w-2", cfg.neonColor)} />
-                        </span>
-
                         {holder.isHost ? (
-                          <Badge variant="outline" className="text-[9px] border-primary/50 text-primary py-0 px-1 gap-0.5 font-bold">
+                          <Badge variant="outline" className="text-[9px] border-amber-500/40 text-amber-300 bg-amber-500/10 py-0.5 px-1.5 rounded-full font-bold gap-1">
                             <Crown className="w-2.5 h-2.5 text-amber-400" /> Host
                           </Badge>
                         ) : isMe ? (
-                          <Badge variant="outline" className="text-[9px] border-accent/50 text-accent py-0 px-1 gap-0.5 font-bold">
-                            <Sparkles className="w-2.5 h-2.5" /> You
+                          <Badge variant="outline" className="text-[9px] border-primary/40 text-primary-foreground bg-primary/30 py-0.5 px-1.5 rounded-full font-bold gap-1">
+                            <Sparkles className="w-2.5 h-2.5 text-accent" /> You
                           </Badge>
                         ) : null}
+
+                        {/* Host Moderation Menu */}
+                        {isHost && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-6 w-6 text-muted-foreground hover:text-foreground rounded-lg p-0"
+                                title={`Manage Controller ${slotNum}`}
+                              >
+                                <MoreVertical className="w-3.5 h-3.5" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-52 rounded-xl bg-card border-white/10 shadow-xl">
+                              <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
+                                Controller {slotNum} Options
+                              </DropdownMenuLabel>
+                              <DropdownMenuSeparator className="bg-white/10" />
+                              <DropdownMenuSub>
+                                <DropdownMenuSubTrigger className="text-xs cursor-pointer rounded-lg">
+                                  <Send className="w-3 h-3 mr-2 text-primary" /> Pass to spectator...
+                                </DropdownMenuSubTrigger>
+                                <DropdownMenuSubContent className="w-48 rounded-xl bg-card border-white/10 shadow-xl">
+                                  {eligibleSpectators.length === 0 ? (
+                                    <div className="p-2.5 text-xs text-muted-foreground text-center">
+                                      No spectators in room
+                                    </div>
+                                  ) : (
+                                    eligibleSpectators.map((p) => (
+                                      <DropdownMenuItem
+                                        key={p.peerId}
+                                        onClick={() => onPassSlot?.(slotNum, p.peerId, p.playerName)}
+                                        className="cursor-pointer text-xs rounded-lg font-bold"
+                                      >
+                                        <span className="truncate">{p.playerName}</span>
+                                      </DropdownMenuItem>
+                                    ))
+                                  )}
+                                </DropdownMenuSubContent>
+                              </DropdownMenuSub>
+                              <DropdownMenuItem
+                                onClick={() => onKickSlot?.(slotNum)}
+                                className="cursor-pointer text-xs text-destructive focus:text-destructive rounded-lg flex items-center gap-2"
+                              >
+                                <UserX className="w-3.5 h-3.5" /> Remove from Slot
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
                       </>
                     ) : (
-                      <span className="text-[9px] font-sans uppercase font-bold text-muted-foreground/60 tracking-wider">
-                        Open Slot
+                      <span className="text-[10px] font-sans font-medium text-muted-foreground/60">
+                        Available
                       </span>
-                    )}
-
-                    {/* Host Moderation Menu on every slot */}
-                    {isHost && (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-5 w-5 text-muted-foreground hover:text-primary p-0"
-                            title={`Host Moderation P${slotNum}`}
-                          >
-                            <MoreVertical className="w-3 h-3" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-52 bg-card border-border">
-                          <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
-                            Host Actions ({cfg.upTag})
-                          </DropdownMenuLabel>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuSub>
-                            <DropdownMenuSubTrigger className="text-xs cursor-pointer">
-                              <Send className="w-3 h-3 mr-2 text-primary" /> Pass to spectator...
-                            </DropdownMenuSubTrigger>
-                            <DropdownMenuSubContent className="w-48 bg-card border-border">
-                              {eligibleSpectators.length === 0 ? (
-                                <div className="p-2 text-xs text-muted-foreground text-center">
-                                  No spectators available
-                                </div>
-                              ) : (
-                                eligibleSpectators.map((p) => (
-                                  <DropdownMenuItem
-                                    key={p.peerId}
-                                    onClick={() => onPassSlot?.(slotNum, p.peerId, p.playerName)}
-                                    className="cursor-pointer text-xs"
-                                  >
-                                    <span className="font-bold truncate">{p.playerName}</span>
-                                  </DropdownMenuItem>
-                                ))
-                              )}
-                            </DropdownMenuSubContent>
-                          </DropdownMenuSub>
-                          {isOccupied && (
-                            <DropdownMenuItem
-                              onClick={() => onKickSlot?.(slotNum)}
-                              className="cursor-pointer text-xs text-destructive focus:text-destructive flex items-center gap-2"
-                            >
-                              <UserX className="w-3.5 h-3.5" /> Kick to Spectators
-                            </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
                     )}
                   </div>
                 </div>
 
-                {/* Occupant details or Claim / Pass / Request controls */}
-                <div className="space-y-1.5">
-                  {isOccupied ? (
-                    <div className="space-y-0.5">
-                      <div className="flex items-center justify-between gap-1 min-w-0">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <Gamepad2 className={cn("w-3.5 h-3.5 shrink-0", cfg.color)} />
-                          <span className="font-sans font-bold text-xs truncate text-foreground">
-                            {holder.playerName}
+                {/* Middle Content: Live Input Activity HUD (when isMe) or Occupant Status */}
+                {isOccupied ? (
+                  <div className="space-y-2 py-0.5">
+                    {/* Live Input Activity Dots / Buttons */}
+                    {isMe ? (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                          <span className="font-semibold text-foreground flex items-center gap-1">
+                            <Radio className="w-2.5 h-2.5 text-emerald-400 animate-pulse" /> Live Input Bus:
+                          </span>
+                          <span className="font-mono text-[9px] text-emerald-400">P{slotNum} Active</span>
+                        </div>
+                        <div className="grid grid-cols-5 gap-1">
+                          {BUTTON_INDICATORS.map((btn) => {
+                            const isDown = activeButtons.has(btn.id);
+                            return (
+                              <span
+                                key={btn.id}
+                                className={cn(
+                                  "text-[9px] font-mono font-bold text-center py-0.5 rounded-md transition-all select-none border",
+                                  isDown
+                                    ? "bg-emerald-400 text-black border-emerald-300 shadow-[0_0_12px_rgba(52,211,153,0.9)] font-black scale-105"
+                                    : "bg-black/40 border-white/10 text-muted-foreground/70"
+                                )}
+                              >
+                                {btn.label}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-2 rounded-xl bg-black/30 border border-white/5 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="relative flex h-2 w-2">
+                            <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", cfg.dotColor)} />
+                            <span className={cn("relative inline-flex rounded-full h-2 w-2", cfg.dotColor)} />
+                          </span>
+                          <span className="text-[11px] font-medium text-muted-foreground truncate">
+                            Remote player ready
                           </span>
                         </div>
-                        {onOpenControls && (
+                        {/* Request Controller button if current user is spectator */}
+                        {!mySlot && onRequestSlot && (
                           <Button
-                            type="button"
                             size="sm"
                             variant="ghost"
-                            onClick={() => onOpenControls(slotNum)}
-                            className="h-5 text-[9px] px-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 border border-border/50 gap-0.5 rounded shrink-0 font-sans"
-                            title={`Rebind Controls for Player ${slotNum}`}
+                            onClick={() => onRequestSlot(slotNum)}
+                            className="h-6 text-[10px] px-2 text-primary hover:text-primary-foreground hover:bg-primary/20 rounded-lg font-bold gap-1"
                           >
-                            <Settings2 className="w-2.5 h-2.5 text-accent" /> Rebind
+                            <Hand className="w-2.5 h-2.5 text-accent" /> Request
                           </Button>
                         )}
                       </div>
-                      <p className="text-[9px] text-muted-foreground font-sans uppercase tracking-wider flex items-center gap-1">
-                        <Radio className="w-2 h-2 text-accent" />
-                        {isMe ? "Active on your controls" : "Remote player controller"}
-                      </p>
-                    </div>
-                  ) : (
-                    <div>
-                      <Button
-                        size="sm"
-                        onClick={() => onClaimSlot(slotNum)}
-                        className={cn(
-                          "w-full h-7 text-[10px] font-black font-display tracking-wider uppercase transition-all flex items-center justify-center gap-1",
-                          "bg-gradient-to-r from-primary/30 via-primary/60 to-primary/30 hover:from-primary hover:to-primary text-primary-foreground border border-primary/70 shadow-[0_0_12px_rgba(0,180,255,0.3)] animate-pulse hover:animate-none hover:scale-[1.01]"
-                        )}
-                      >
-                        <Coins className="w-3 h-3 text-yellow-300 animate-bounce" />
-                        <span>INSERT COIN / JOIN</span>
-                      </Button>
-                    </div>
-                  )}
+                    )}
 
-                  {/* If isMe: Pass Controller dropdown & Release (Spectate) button */}
-                  {isMe && (
-                    <div className="flex items-center gap-1 pt-0.5">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="flex-1 h-6 text-[10px] px-1.5 border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
-                          >
-                            <Send className="w-2.5 h-2.5" /> Pass
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="start" className="w-48 bg-card border-border">
-                          <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
-                            Pass to Spectator
-                          </DropdownMenuLabel>
-                          <DropdownMenuSeparator />
-                          {eligibleSpectators.length === 0 ? (
-                            <div className="p-2 text-xs text-muted-foreground text-center">
-                              No spectators available
-                            </div>
-                          ) : (
-                            eligibleSpectators.map((p) => (
+                    {/* Pass to spectator shortcut (when isMe) */}
+                    {isMe && onPassSlot && eligibleSpectators.length > 0 && (
+                      <div className="flex items-center justify-between text-[10px] pt-0.5 text-muted-foreground">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              className="text-[10px] text-muted-foreground hover:text-primary font-medium flex items-center gap-1 transition-colors"
+                            >
+                              <Send className="w-2.5 h-2.5" /> Pass Controller to Spectator...
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start" className="w-48 rounded-xl bg-card border-white/10 shadow-xl">
+                            <DropdownMenuLabel className="text-xs text-muted-foreground uppercase font-mono">
+                              Pass Controller {slotNum}
+                            </DropdownMenuLabel>
+                            <DropdownMenuSeparator className="bg-white/10" />
+                            {eligibleSpectators.map((p) => (
                               <DropdownMenuItem
                                 key={p.peerId}
-                                onClick={() => onPassSlot?.(slotNum, p.peerId, p.playerName)}
-                                className="cursor-pointer text-xs flex items-center justify-between"
+                                onClick={() => onPassSlot(slotNum, p.peerId, p.playerName)}
+                                className="cursor-pointer text-xs rounded-lg font-bold"
                               >
-                                <span className="font-bold truncate">{p.playerName}</span>
-                                <span className="text-[10px] text-muted-foreground font-mono">Give</span>
+                                <span>{p.playerName}</span>
                               </DropdownMenuItem>
-                            ))
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => onReleaseSlot(slotNum)}
-                        className="h-6 text-[10px] px-1.5 border-muted-foreground/30 text-muted-foreground hover:text-destructive hover:border-destructive font-sans"
-                        title="Release (Spectate)"
-                      >
-                        <UserX className="w-2.5 h-2.5 mr-0.5" /> Spectate
-                      </Button>
-                    </div>
-                  )}
-
-                  {/* If occupied by someone else, AND !mySlot (current user is spectator): Request Controller button */}
-                  {isOccupied && !isMe && !mySlot && (
-                    <div className="pt-0.5">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => onRequestSlot?.(slotNum)}
-                        className="w-full h-6 text-[10px] px-1.5 border-primary/40 text-primary hover:bg-primary/20 flex items-center justify-center gap-1 font-sans"
-                      >
-                        <Hand className="w-2.5 h-2.5 text-accent" /> Request Controller
-                      </Button>
-                    </div>
-                  )}
-                </div>
-
-                {/* Real-time Arcade Button Activity HUD (when isMe) */}
-                {isMe && (
-                  <div className="pt-1.5 border-t border-border/50 space-y-1">
-                    <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-muted-foreground">
-                      <span className="flex items-center gap-1 font-bold text-foreground">
-                        <Zap className="w-2.5 h-2.5 text-accent animate-pulse" /> Arcade HUD
-                      </span>
-                      <span className="text-accent font-bold animate-pulse text-[8px] bg-accent/20 px-1 py-0 rounded border border-accent/40">
-                        LIVE BUS
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-6 gap-0.5">
-                      {BUTTON_INDICATORS.map((btn) => {
-                        const isDown = activeButtons.has(btn.id);
-                        return (
-                          <span
-                            key={btn.id}
-                            className={cn(
-                              "text-[8px] font-mono font-bold text-center py-0.5 rounded transition-all select-none",
-                              isDown
-                                ? "bg-accent text-accent-foreground shadow-[0_0_10px_rgba(255,30,30,0.95)] translate-y-0.5 border-t border-white/40 font-black ring-1 ring-accent"
-                                : "bg-black/60 border border-white/10 text-muted-foreground/80 shadow-[0_1px_0_rgba(255,255,255,0.06)]"
-                            )}
-                          >
-                            {btn.label}
-                          </span>
-                        );
-                      })}
-                    </div>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="py-3 flex flex-col items-center justify-center text-center space-y-1">
+                    <p className="text-xs font-semibold text-muted-foreground/80">
+                      Controller {slotNum} Available
+                    </p>
+                    <p className="text-[10px] text-muted-foreground/50">
+                      Press Take Controller to join
+                    </p>
                   </div>
                 )}
+
+                {/* Bottom Row: Clear Action Button */}
+                <div className="pt-1 border-t border-white/5">
+                  {isOccupied ? (
+                    onOpenControls ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => onOpenControls(slotNum)}
+                        className="w-full h-8 text-xs font-bold rounded-xl bg-white/[0.08] hover:bg-white/[0.14] text-foreground border border-white/10 flex items-center justify-center gap-1.5 transition-all hover:scale-[1.01]"
+                        title={`Configure & Test Controls for Player ${slotNum}`}
+                      >
+                        <Settings2 className="w-3.5 h-3.5 text-primary" />
+                        <span>Keybinds & Setup</span>
+                      </Button>
+                    ) : null
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => onClaimSlot(slotNum)}
+                      className={cn(
+                        "w-full h-8 text-xs font-black tracking-wide uppercase rounded-xl transition-all flex items-center justify-center gap-1.5",
+                        "bg-gradient-to-r from-primary to-accent hover:from-primary/90 hover:to-accent/90 text-primary-foreground shadow-md shadow-primary/20 hover:scale-[1.02]"
+                      )}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Take Controller</span>
+                    </Button>
+                  )}
+                </div>
               </CardContent>
             </Card>
           );
