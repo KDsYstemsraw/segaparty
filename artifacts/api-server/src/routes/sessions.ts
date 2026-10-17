@@ -10,16 +10,20 @@ import {
   LeaveSessionBody,
 } from "@workspace/api-zod";
 
+import crypto from "node:crypto";
+
 const router = Router();
 
 // In-memory fallback session store when DATABASE_URL is not configured
 const inMemorySessions = new Map<string, Session>();
 
 function generateCode(): string {
+  // Alphanumeric uppercase without ambiguous characters (no 0, O, I, 1)
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
   for (let i = 0; i < 6; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+    const idx = crypto.randomInt(0, chars.length);
+    code += chars[idx];
   }
   return code;
 }
@@ -28,7 +32,7 @@ function generatePlayerId(): string {
   return crypto.randomUUID();
 }
 
-async function findSession(code: string): Promise<Session | undefined> {
+export async function findSession(code: string): Promise<Session | undefined> {
   const upperCode = code.toUpperCase();
   if (hasDatabase && db) {
     const sessions = await db.select().from(sessionsTable).where(eq(sessionsTable.code, upperCode));
@@ -112,12 +116,25 @@ router.get("/sessions/:code", async (req, res) => {
     return;
   }
 
+  const callerPlayerId = (req.headers["x-player-id"] || req.headers["x-host-secret"] || req.query.playerId) as string | undefined;
+  const isCallerHost = Boolean(callerPlayerId && callerPlayerId === session.hostId);
+
+  const players = session.players as Array<{ id: string; name: string; isHost: boolean; playerIndex: number; slot?: number }>;
+  const sanitizedPlayers = players.map((p) => ({
+    name: p.name,
+    slot: p.slot ?? p.playerIndex,
+    playerIndex: p.playerIndex ?? p.slot ?? 1,
+    isHost: Boolean(p.isHost),
+    ...(callerPlayerId && p.id === callerPlayerId ? { id: p.id } : {}),
+  }));
+
   res.json({
     code: session.code,
-    hostId: session.hostId,
-    players: session.players,
+    players: sanitizedPlayers,
     maxPlayers: session.maxPlayers,
-    createdAt: session.createdAt.toISOString(),
+    createdAt: session.createdAt instanceof Date ? session.createdAt.toISOString() : String(session.createdAt),
+    isHost: isCallerHost,
+    ...(isCallerHost ? { hostId: session.hostId } : {}),
   });
 });
 
@@ -205,6 +222,7 @@ router.post("/sessions/:code/leave", async (req, res) => {
 
   const code = paramsParsed.data.code.toUpperCase();
   const { playerId } = bodyParsed.data;
+  const hostSecretHeader = (req.headers["x-host-secret"] || req.headers["x-player-id"] || (req.body as Record<string, unknown>)?.hostSecret) as string | undefined;
 
   const session = await findSession(code);
   if (!session) {
@@ -212,11 +230,20 @@ router.post("/sessions/:code/leave", async (req, res) => {
     return;
   }
 
+  const isHostAttempt = playerId === session.hostId;
+  const isHostAuthorized = isHostAttempt && Boolean(hostSecretHeader && hostSecretHeader === session.hostId);
+
+  // SEC-12: If caller claims to be host or wants to terminate room, require hostSecret authorization!
+  if (isHostAttempt && !isHostAuthorized) {
+    res.status(403).json({ error: "Unauthorized: valid host secret is required to terminate session" });
+    return;
+  }
+
   const players = session.players as Array<{ id: string; name: string; isHost: boolean; playerIndex: number }>;
   const updatedPlayers = players.filter((p) => p.id !== playerId);
 
-  // If host left or no players, delete session
-  if (playerId === session.hostId || updatedPlayers.length === 0) {
+  // If authorized host left or no players, delete session
+  if ((isHostAttempt && isHostAuthorized) || updatedPlayers.length === 0) {
     if (hasDatabase && db) {
       await db.delete(sessionsTable).where(eq(sessionsTable.code, code));
     } else {

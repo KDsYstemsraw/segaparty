@@ -8,11 +8,68 @@ import { romProxyRouter } from "./routes/romProxy";
 import { logger } from "./lib/logger";
 
 const app: Express = express();
+const isProduction = process.env.NODE_ENV === "production";
 
+// Allowed origins for CORS policy (SEC-17)
+const ALLOWED_ORIGINS = new Set([
+  "https://retroparty.onrender.com",
+  "https://segaparty.com",
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5173",
+]);
+
+function isAllowedCorsOrigin(origin: string): boolean {
+  try {
+    const parsed = new URL(origin);
+    if (!isProduction && (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1")) {
+      return true;
+    }
+    if (ALLOWED_ORIGINS.has(origin) || ALLOWED_ORIGINS.has(parsed.origin)) {
+      return true;
+    }
+    if (parsed.hostname.endsWith(".onrender.com")) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+// Defensive security headers middleware (SEC-17)
 app.use((req, res, next) => {
+  // Cross-Origin Isolation headers for SharedArrayBuffer & WebAssembly
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
   res.setHeader("Cross-Origin-Embedder-Policy", "credentialless");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+
+  // Standard defense-in-depth security headers
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+
+  if (isProduction) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+
+  // Content-Security-Policy: allow scripts for Wasm/EmulatorJS, connect to WebSockets, and Google Fonts
+  res.setHeader(
+    "Content-Security-Policy",
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: blob: https:",
+      "media-src 'self' data: blob:",
+      "connect-src 'self' wss: ws: https://*.google.com https://*.cloudflare.com https:",
+      "worker-src 'self' blob:",
+      "frame-ancestors 'self'",
+    ].join("; "),
+  );
+
   next();
 });
 
@@ -35,7 +92,20 @@ app.use(
     },
   }),
 );
-app.use(cors());
+
+// Restricted CORS policy (SEC-17)
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || isAllowedCorsOrigin(origin)) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
+    credentials: true,
+  }),
+);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -68,4 +138,3 @@ if (staticDir) {
 }
 
 export default app;
-

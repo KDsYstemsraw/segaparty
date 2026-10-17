@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @plugin "@tailwindcss/typography";
@@ -72,7 +71,7 @@
   --secondary-foreground: 210 40% 98%;
 
   --muted: 224 20% 12%;
-  --muted-foreground: 218 15% 65%;
+  --muted-foreground: 218 16% 72%;
 
   --accent: 262 83% 65%;
   --accent-foreground: 0 0% 100%;
@@ -114,7 +113,7 @@
   --secondary-foreground: 210 40% 98%;
 
   --muted: 224 20% 12%;
-  --muted-foreground: 218 15% 65%;
+  --muted-foreground: 218 16% 72%;
 
   --accent: 262 83% 65%;
   --accent-foreground: 0 0% 100%;
@@ -141,4 +140,9 @@
     letter-spacing: -0.02em;
     font-weight: 700;
   }
+}
+
+.text-contrast-muted {
+  color: hsl(var(--muted-foreground));
+  opacity: 0.85;
 }

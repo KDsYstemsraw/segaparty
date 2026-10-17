@@ -1,7 +1,49 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage } from "http";
 import type { Server } from "http";
+import crypto from "node:crypto";
+import { findSession } from "../routes/sessions";
 import { logger } from "./logger";
+
+const isProduction = process.env.NODE_ENV === "production";
+const ALLOWED_WS_ORIGINS = new Set([
+  "https://retroparty.onrender.com",
+  "https://segaparty.com",
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:5173",
+]);
+
+function isAllowedWsOrigin(origin?: string, host?: string): boolean {
+  if (!origin) return true;
+  try {
+    const u = new URL(origin);
+    if (!isProduction && (u.hostname === "localhost" || u.hostname === "127.0.0.1")) {
+      return true;
+    }
+    if (ALLOWED_WS_ORIGINS.has(origin) || ALLOWED_WS_ORIGINS.has(u.origin)) {
+      return true;
+    }
+    if (host && u.host === host) {
+      return true;
+    }
+    if (u.hostname.endsWith(".onrender.com")) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function timingSafeEqualStr(a?: string | null, b?: string | null): boolean {
+  if (!a || !b) return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 export interface SlotHolder {
   peerId: string;
@@ -84,6 +126,16 @@ export function attachSignalingServer(server: Server) {
     server,
     path: "/ws",
     maxPayload: 4 * 1024 * 1024, // 4 MB transport-level ceiling
+    verifyClient: (info, callback) => {
+      const origin = info.origin || (info.req.headers["origin"] as string | undefined);
+      const host = info.req.headers["host"] as string | undefined;
+      if (origin && !isAllowedWsOrigin(origin, host)) {
+        logger.warn({ origin, host }, "Rejected WebSocket upgrade: unauthorized origin (CSWSH defense)");
+        callback(false, 403, "Forbidden Origin");
+        return;
+      }
+      callback(true);
+    },
   });
 
   wss.on("connection", (ws: WebSocket, _req: IncomingMessage) => {
@@ -100,7 +152,7 @@ export function attachSignalingServer(server: Server) {
       (ws as WebSocket & { isAlive?: boolean }).isAlive = true;
     });
 
-    ws.on("message", (rawData) => {
+    ws.on("message", async (rawData) => {
       // 1. Raw size check
       const rawLen = Buffer.isBuffer(rawData)
         ? rawData.length
@@ -151,18 +203,26 @@ export function attachSignalingServer(server: Server) {
           return;
         }
 
+        // SEC-15: Check if session actually exists before allocating RoomState
+        const sessionData = await findSession(sessionCode);
+        if (!sessionData) {
+          ws.send(JSON.stringify({ type: "error", message: "Session not found" }));
+          return;
+        }
+
         const room = getOrCreateRoom(sessionCode);
         if (romName) room.romName = romName;
         if (msg.core) room.core = msg.core as string;
 
         cleanupStaleSlots(room);
 
-        // SEC-02: Host verification & takeover protection
+        // SEC-02 / SEC-13: Host verification & takeover protection
         if (role === "host") {
           if (!room.hostSecret) {
             // First host registration: establish secret for this room
-            room.hostSecret = hostSecret || peerId;
-          } else if (hostSecret && hostSecret === room.hostSecret) {
+            room.hostSecret = hostSecret || sessionData.hostId || peerId;
+            room.hostPeerId = peerId;
+          } else if (hostSecret && (timingSafeEqualStr(hostSecret, room.hostSecret) || timingSafeEqualStr(hostSecret, sessionData.hostId))) {
             // Legitimate host reconnecting with valid secret
             room.hostPeerId = peerId;
           } else {
@@ -575,7 +635,7 @@ export function attachSignalingServer(server: Server) {
 
       if (type === "chat") {
         const sessionCode = (msg.sessionCode as string)?.toUpperCase();
-        const text = (msg.text as string)?.trim();
+        const text = String(msg.text || "").slice(0, 500).trim();
         if (!sessionCode || !text || !myPeerId) return;
 
         const room = rooms.get(sessionCode);

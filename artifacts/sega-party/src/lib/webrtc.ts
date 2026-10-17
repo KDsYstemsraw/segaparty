@@ -59,7 +59,7 @@ export interface ChatMessage {
 }
 
 export type SignalMessage =
-  | { type: "join"; sessionCode: string; role: "host" | "guest"; peerId: string; playerName: string; romName?: string }
+  | { type: "join"; sessionCode: string; role: "host" | "guest"; peerId: string; playerName: string; romName?: string; core?: string; hostSecret?: string }
   | { type: "room-state"; hostPeerId: string | null; romName: string | null; slots: SlotState; peers: ParticipantInfo[] }
   | { type: "slot-claim"; sessionCode: string; slot: number }
   | { type: "slot-release"; sessionCode: string; slot?: number }
@@ -69,6 +69,8 @@ export type SignalMessage =
   | { type: "rom-info"; romName: string }
   | { type: "signal"; sessionCode: string; targetPeerId: string; data: unknown; fromPeerId?: string; isRenegotiation?: boolean }
   | { type: "voice-signal"; sessionCode: string; targetPeerId: string; data: unknown; fromPeerId?: string }
+  | { type: "request-ice-restart"; sessionCode: string; fromPeerId?: string }
+  | { type: "ice-restart-offer"; sessionCode: string; sdp: RTCSessionDescriptionInit; toPeerId: string }
   | { type: "leave"; sessionCode: string; peerId: string }
   | { type: "host-info"; hostPeerId: string }
   | { type: "peer-joined"; peerId: string; playerName?: string; role: string }

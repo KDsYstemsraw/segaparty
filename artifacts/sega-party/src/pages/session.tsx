@@ -108,6 +108,7 @@ export default function SessionPage() {
   const [hasWsStream, setHasWsStream] = useState(false);
   const [rtcVideoActive, setRtcVideoActive] = useState(false);
   const [wsReconnectTick, setWsReconnectTick] = useState(0);
+  const wsRetryCountRef = useRef<number>(0);
   const wsImgRef = useRef<HTMLImageElement | null>(null);
   const nextAudioTimeRef = useRef<number>(0);
   const rtcVideoActiveRef = useRef(false);
@@ -469,14 +470,51 @@ export default function SessionPage() {
     }
   }, [isMuted, volume]);
 
+  // Safe unmuted/muted play fallback for strict autoplay policies (iOS Safari, QA2-04)
+  const safePlayVideo = useCallback((videoEl: HTMLVideoElement | null) => {
+    if (!videoEl) return;
+    videoEl.muted = isMutedRef.current;
+    videoEl.volume = isMutedRef.current ? 0 : volumeRef.current;
+    videoEl.play().catch((err) => {
+      if (err?.name === "NotAllowedError") {
+        console.warn("[audio] Unmuted autoplay blocked by browser policy. Falling back to muted playback.");
+        videoEl.muted = true;
+        setIsMuted(true);
+        isMutedRef.current = true;
+        setAudioBlocked(true);
+        videoEl.play().catch(() => {});
+      }
+    });
+  }, []);
+
   // Host creates WebRTC Offer for a connected guest with explicit transceivers
   const createHostOffer = useCallback(
-    async (guestPeerId: string, stream: MediaStream | null) => {
+    async (guestPeerId: string, stream: MediaStream | null, options?: { iceRestart?: boolean }) => {
       try {
-        // Close any existing connection to prevent leaks
         const existingPc = peerConnsRef.current.get(guestPeerId);
+        if (options?.iceRestart && existingPc && existingPc.signalingState !== "closed") {
+          try {
+            console.debug(`[WebRTC] Initiating ICE restart for existing PC with ${guestPeerId}`);
+            if (typeof existingPc.restartIce === "function") {
+              existingPc.restartIce();
+            }
+            const offer = await existingPc.createOffer({ iceRestart: true });
+            await existingPc.setLocalDescription(offer);
+            setWebrtcStatus((prev) => ({ ...prev, lastSignal: `Sent ICE Restart Offer` }));
+            sendSignal(guestPeerId, {
+              type: "offer",
+              sdp: existingPc.localDescription?.toJSON() || { type: "offer", sdp: existingPc.localDescription?.sdp },
+              isRenegotiation: true,
+            });
+            return;
+          } catch (iceErr) {
+            console.warn(`[WebRTC] In-place ICE restart failed with ${guestPeerId}, falling back to new PC:`, iceErr);
+          }
+        }
+
+        // Close any existing connection to prevent leaks
         if (existingPc) {
-          existingPc.close();
+          try { existingPc.close(); } catch {}
         }
 
         const pc = new RTCPeerConnection(RTC_CONFIG);
@@ -488,6 +526,23 @@ export default function SessionPage() {
           maxRetransmits: 0,
         });
         dataChannelsRef.current.set(guestPeerId, dc);
+
+        dc.onclose = () => {
+          console.debug(`[DataChannel] Inputs channel closed for guest ${guestPeerId}`);
+          for (let s = 1; s <= 4; s++) {
+            if (slotAssignmentsRef.current[s]?.peerId === guestPeerId) {
+              sweepSlotInputs(s);
+            }
+          }
+        };
+
+        dc.onerror = () => {
+          for (let s = 1; s <= 4; s++) {
+            if (slotAssignmentsRef.current[s]?.peerId === guestPeerId) {
+              sweepSlotInputs(s);
+            }
+          }
+        };
 
         dc.onmessage = (e) => {
           try {
@@ -524,20 +579,41 @@ export default function SessionPage() {
           }
         };
 
-        pc.oniceconnectionstatechange = () => {
+        pc.oniceconnectionstatechange = async () => {
           loggerDebug(`Host ICE with ${guestPeerId}: ${pc.iceConnectionState}`);
           setWebrtcStatus((prev) => ({ ...prev, ice: pc.iceConnectionState }));
+          if (pc.iceConnectionState === "failed") {
+            console.warn(`[WebRTC] Host ICE failed with ${guestPeerId}, initiating automatic ICE restart...`);
+            try {
+              if (typeof pc.restartIce === "function") {
+                pc.restartIce();
+              }
+              const offer = await pc.createOffer({ iceRestart: true });
+              await pc.setLocalDescription(offer);
+              sendSignal(guestPeerId, {
+                type: "offer",
+                sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp },
+                isRenegotiation: true,
+              });
+            } catch (e) {
+              console.error("[WebRTC] Host ICE restart error:", e);
+            }
+          }
         };
 
-        const offer = await pc.createOffer();
+        const offer = await pc.createOffer(options?.iceRestart ? { iceRestart: true } : undefined);
         await pc.setLocalDescription(offer);
         setWebrtcStatus((prev) => ({ ...prev, lastSignal: `Sent Offer (${stream?.getTracks().length || 0} tracks)` }));
-        sendSignal(guestPeerId, { type: "offer", sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp } });
+        sendSignal(guestPeerId, {
+          type: "offer",
+          sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp },
+          isRenegotiation: Boolean(options?.iceRestart),
+        });
       } catch (err) {
         console.error("Error creating host offer:", err);
       }
     },
-    [sendSignal],
+    [sendSignal, sweepSlotInputs],
   );
 
   // Helper debug log
@@ -597,9 +673,7 @@ export default function SessionPage() {
                   if (videoRef.current.srcObject !== combined) {
                     videoRef.current.srcObject = combined;
                   }
-                  videoRef.current.muted = isMutedRef.current;
-                  videoRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
-                  videoRef.current.play().catch(() => {});
+                  safePlayVideo(videoRef.current);
                 }
 
                 return combined;
@@ -609,9 +683,7 @@ export default function SessionPage() {
               const onUnmute = () => {
                 console.debug(`[audio] Track unmuted: kind=${e.track.kind}, id=${e.track.id}`);
                 if (videoRef.current) {
-                  videoRef.current.muted = isMutedRef.current;
-                  videoRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
-                  videoRef.current.play().catch(() => {});
+                  safePlayVideo(videoRef.current);
                 }
               };
 
@@ -646,16 +718,35 @@ export default function SessionPage() {
               setWebrtcStatus((prev) => ({ ...prev, ice: pc!.iceConnectionState }));
               if (pc!.iceConnectionState === "connected" || pc!.iceConnectionState === "completed") {
                 setConnectionStatus("connected");
-              } else if (pc!.iceConnectionState === "failed") {
-                setConnectionStatus("error");
+              } else if (pc!.iceConnectionState === "failed" || pc!.iceConnectionState === "disconnected") {
+                setConnectionStatus("connecting");
+                console.warn(`[WebRTC] Guest ICE state ${pc!.iceConnectionState}, requesting ICE restart...`);
+                if (wsRef.current?.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(
+                    JSON.stringify({
+                      type: "request-ice-restart",
+                      sessionCode: code,
+                      fromPeerId: myPeerId.current,
+                    }),
+                  );
+                }
               }
             };
 
             pc.onconnectionstatechange = () => {
               if (pc!.connectionState === "connected") {
                 setConnectionStatus("connected");
-              } else if (pc!.connectionState === "failed") {
-                setConnectionStatus("error");
+              } else if (pc!.connectionState === "failed" || pc!.connectionState === "disconnected") {
+                setConnectionStatus("connecting");
+                if (wsRef.current?.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(
+                    JSON.stringify({
+                      type: "request-ice-restart",
+                      sessionCode: code,
+                      fromPeerId: myPeerId.current,
+                    }),
+                  );
+                }
               }
             };
           }
@@ -787,6 +878,9 @@ export default function SessionPage() {
   // Kick Controller Slot to Spectator
   const handleKickSlot = useCallback(
     (slot: number) => {
+      // Immediately sweep slot inputs locally on the host (QA2-07)
+      sweepSlotInputs(slot);
+
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(
           JSON.stringify({
@@ -797,7 +891,7 @@ export default function SessionPage() {
         );
       }
     },
-    [code],
+    [code, sweepSlotInputs],
   );
 
   // Request Controller Slot
@@ -830,9 +924,11 @@ export default function SessionPage() {
     setConnectionStatus("connecting");
 
     ws.onopen = () => {
+      wsRetryCountRef.current = 0; // Reset exponential backoff on successful connect
       if (isHost) {
         setConnectionStatus("connected");
       }
+      const isReturningHost = Boolean(myPlayerId && session?.hostId && myPlayerId === session.hostId);
       ws.send(
         JSON.stringify({
           type: "join",
@@ -842,6 +938,7 @@ export default function SessionPage() {
           playerName: myPlayerName,
           romName: activeRomName || undefined,
           core: activeCore || undefined,
+          hostSecret: (isHost || isReturningHost) ? myPlayerId : undefined,
         }),
       );
     };
@@ -1110,6 +1207,14 @@ export default function SessionPage() {
           handleSignal(msg.fromPeerId as string, msg.data as Record<string, unknown>);
         }
 
+        if (msg.type === "request-ice-restart" && isHostRef.current) {
+          const fromPeerId = (msg.fromPeerId as string) || (msg.peerId as string);
+          if (fromPeerId) {
+            console.debug(`[WebRTC] Host received request-ice-restart from ${fromPeerId}`);
+            createHostOffer(fromPeerId, gameStreamRef.current, { iceRestart: true });
+          }
+        }
+
         if (msg.type === "peer-left") {
           const peerId = msg.peerId as string;
           const pc = peerConnsRef.current.get(peerId);
@@ -1159,9 +1264,15 @@ export default function SessionPage() {
 
     ws.onclose = () => {
       if (!unmounted) {
+        const attempts = wsRetryCountRef.current;
+        wsRetryCountRef.current += 1;
+        const baseDelay = Math.min(15000, 1000 * Math.pow(1.8, Math.min(attempts, 6)));
+        const jitter = 0.75 + Math.random() * 0.5;
+        const delay = Math.max(500, Math.floor(baseDelay * jitter));
+        console.debug(`[WS] Connection closed. Reconnecting in ${delay}ms (attempt ${attempts + 1})...`);
         setTimeout(() => {
           if (!unmounted) setWsReconnectTick((t) => t + 1);
-        }, 2000);
+        }, delay);
       }
     };
 
@@ -1171,47 +1282,39 @@ export default function SessionPage() {
         ws.send(JSON.stringify({ type: "leave", sessionCode: code, peerId: myPeerId.current }));
       }
       ws.close();
-      peerConnsRef.current.forEach((pc) => pc.close());
-      peerConnsRef.current.clear();
-      dataChannelsRef.current.forEach((dc) => dc.close());
-      dataChannelsRef.current.clear();
-      iceCandidateQueueRef.current.clear();
+      // NOTE: Do NOT close peerConnsRef or dataChannelsRef here!
+      // Healthy WebRTC P2P streams must continue streaming uninterrupted even if the signaling WebSocket drops and reconnects (QA2-01).
     };
   }, [code, session?.hostId, myPlayerId, myPlayerName, session?.code, wsReconnectTick, createHostOffer, handleSignal, toast]);
 
-  // Bind remote stream to HTML5 video element with auto-recovery and onunmute handler
+  // Dedicated unmount cleanup effect for WebRTC connections
+  useEffect(() => {
+    return () => {
+      peerConnsRef.current.forEach((pc) => {
+        try { pc.close(); } catch {}
+      });
+      peerConnsRef.current.clear();
+      dataChannelsRef.current.forEach((dc) => {
+        try { dc.close(); } catch {}
+      });
+      dataChannelsRef.current.clear();
+      iceCandidateQueueRef.current.clear();
+    };
+  }, []);
+
+  // Bind remote stream to HTML5 video element with auto-recovery and onunmute handler (QA2-04)
   useEffect(() => {
     if (videoRef.current && remoteStream) {
       if (videoRef.current.srcObject !== remoteStream) {
         videoRef.current.srcObject = remoteStream;
       }
-      videoRef.current.muted = isMuted;
-      videoRef.current.volume = isMuted ? 0 : volume;
-      videoRef.current
-        .play()
-        .then(() => {
-          setConnectionStatus("connected");
-        })
-        .catch((err) => {
-          // If browser blocked unmuted autoplay, mute temporarily so video starts playing, but keep banner visible
-          if (err && err.name === "NotAllowedError" && !isMutedRef.current) {
-            console.debug("[audio] Autoplay unmuted blocked by browser policy, muting video");
-            setIsMuted(true);
-            isMutedRef.current = true;
-            if (videoRef.current) {
-              videoRef.current.muted = true;
-              videoRef.current.play().catch(() => {});
-            }
-          }
-        });
+      safePlayVideo(videoRef.current);
 
       // Auto-trigger playback when video packets begin arriving
       remoteStream.getVideoTracks().forEach((track) => {
         track.onunmute = () => {
           if (videoRef.current) {
-            videoRef.current.muted = isMuted;
-            videoRef.current.volume = isMuted ? 0 : volume;
-            videoRef.current.play().catch(() => {});
+            safePlayVideo(videoRef.current);
           }
         };
       });
@@ -1221,14 +1324,12 @@ export default function SessionPage() {
         track.onunmute = () => {
           console.debug(`[audio] Remote audio track unmuted: ${track.id}`);
           if (videoRef.current) {
-            videoRef.current.muted = isMuted;
-            videoRef.current.volume = isMuted ? 0 : volume;
-            videoRef.current.play().catch(() => {});
+            safePlayVideo(videoRef.current);
           }
         };
       });
     }
-  }, [remoteStream, isMuted, volume]);
+  }, [remoteStream, safePlayVideo]);
 
   // Handle guest volume and mute adjustments
   useEffect(() => {
@@ -1327,23 +1428,47 @@ export default function SessionPage() {
     [code, isHost],
   );
 
-  // Host dual-transport audio chunk broadcasting over WebSocket for instant guest sound
+  // Host dual-transport audio chunk broadcasting over WebSocket for instant guest sound (throttled when RTC is active, QA2-05)
   const handleAudioChunk = useCallback(
     (pcmBase64: string, sampleRate: number) => {
-      if (
-        isHost &&
-        wsRef.current?.readyState === WebSocket.OPEN &&
-        (participantsRef.current.length > 1 || peerConnsRef.current.size > 0)
-      ) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: "audio-chunk",
-            sessionCode: code,
-            pcm: pcmBase64,
-            sampleRate,
-          }),
-        );
+      if (!isHost || wsRef.current?.readyState !== WebSocket.OPEN) return;
+
+      const guests = participantsRef.current.filter((p) => p.peerId !== myPeerId.current);
+      if (guests.length === 0 && peerConnsRef.current.size === 0) return;
+
+      // Only broadcast WS audio chunk if at least one guest is not yet fully connected via WebRTC
+      let anyGuestNeedsFallback = false;
+      if (guests.length > 0) {
+        anyGuestNeedsFallback = guests.some((guest) => {
+          const pc = peerConnsRef.current.get(guest.peerId);
+          if (!pc) return true;
+          const isConnected =
+            pc.connectionState === "connected" ||
+            (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed");
+          return !isConnected;
+        });
+      } else {
+        for (const [, pc] of peerConnsRef.current) {
+          const isConnected =
+            pc.connectionState === "connected" ||
+            (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed");
+          if (!isConnected) {
+            anyGuestNeedsFallback = true;
+            break;
+          }
+        }
       }
+
+      if (!anyGuestNeedsFallback) return;
+
+      wsRef.current.send(
+        JSON.stringify({
+          type: "audio-chunk",
+          sessionCode: code,
+          pcm: pcmBase64,
+          sampleRate,
+        }),
+      );
     },
     [code, isHost],
   );
@@ -1591,7 +1716,12 @@ export default function SessionPage() {
   const handleUnloadRom = async () => {
     setIsReloadingRom(true);
     setRomPickerOpen(false);
-    gameStreamRef.current = null;
+    if (gameStreamRef.current) {
+      gameStreamRef.current.getTracks().forEach((track) => {
+        try { track.stop(); } catch {}
+      });
+      gameStreamRef.current = null;
+    }
     setCurrentRomUrl("");
     setActiveRomName(null);
     clearRom();
@@ -1775,6 +1905,21 @@ export default function SessionPage() {
   const displayParticipants = participants.length > 0
     ? participants
     : (myPlayerName ? [{ peerId: myPeerId.current, playerName: myPlayerName, role: isHost ? ("host" as const) : ("guest" as const) }] : []);
+
+  const guests = participants.filter((p) => p.peerId !== myPeerId.current);
+  const hasActiveRtcPeers = Boolean(
+    isHost &&
+    guests.length > 0 &&
+    guests.every((guest) => {
+      const pc = peerConnsRef.current.get(guest.peerId);
+      return (
+        pc &&
+        (pc.connectionState === "connected" ||
+          pc.iceConnectionState === "connected" ||
+          pc.iceConnectionState === "completed")
+      );
+    })
+  );
 
   const getPlayerSlotForPeer = (peerId: string): number | null => {
     for (const [slotStr, holder] of Object.entries(slots)) {
@@ -2027,6 +2172,7 @@ export default function SessionPage() {
                     onAudioTrackAdded={handleAudioTrackAdded}
                     onVideoFrame={handleVideoFrame}
                     onAudioChunk={handleAudioChunk}
+                    hasActiveRtcPeers={hasActiveRtcPeers}
                   />
 
                   {/* On-Screen In-Game Chat Overlay (Host) */}
@@ -2202,9 +2348,7 @@ export default function SessionPage() {
                         videoRef.current = el;
                         if (el && remoteStream && el.srcObject !== remoteStream) {
                           el.srcObject = remoteStream;
-                          el.muted = isMutedRef.current;
-                          el.volume = isMutedRef.current ? 0 : volumeRef.current;
-                          el.play().catch(() => {});
+                          safePlayVideo(el);
                         }
                       }}
                       onTimeUpdate={(e) => {

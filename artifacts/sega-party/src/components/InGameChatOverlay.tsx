@@ -14,6 +14,10 @@ export interface InGameChatOverlayProps {
   onOpenChange: (open: boolean) => void;
   onSendMessage: (text: string) => void;
   chatHotkey?: string;
+  isFullscreen?: boolean;
+  isSidebarOpen?: boolean;
+  showPassiveToasts?: boolean;
+  placement?: "bottom-left" | "top-left";
 }
 
 const EMOJI_REACTIONS = ["🔥", "🎮", "👏", "😂", "🚀", "🏆", "❤️", "⚡"];
@@ -44,6 +48,10 @@ export function InGameChatOverlay({
   onOpenChange,
   onSendMessage,
   chatHotkey = "Enter",
+  isFullscreen,
+  isSidebarOpen,
+  showPassiveToasts: propShowPassiveToasts,
+  placement = "bottom-left",
 }: InGameChatOverlayProps) {
   const [inputText, setInputText] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -51,6 +59,52 @@ export function InGameChatOverlay({
 
   // Time tracker for auto-fading passive toasts (6.5s window)
   const [now, setNow] = useState(() => Date.now());
+
+  // Dynamic Fullscreen & Desktop Viewport Detection (DES-R2-05)
+  const [domFullscreen, setDomFullscreen] = useState(false);
+  const [isDesktopWidth, setIsDesktopWidth] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth >= 1024 : false
+  );
+
+  useEffect(() => {
+    const updateFs = () => {
+      if (typeof document === "undefined") return;
+      const isFs = Boolean(
+        document.fullscreenElement ||
+        document.querySelector(".fixed.inset-0.z-\\[80\\]")
+      );
+      setDomFullscreen(isFs);
+    };
+
+    updateFs();
+    document.addEventListener("fullscreenchange", updateFs);
+
+    const observer = new MutationObserver(updateFs);
+    if (typeof document !== "undefined" && document.body) {
+      observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ["class"] });
+    }
+
+    return () => {
+      document.removeEventListener("fullscreenchange", updateFs);
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsDesktopWidth(window.innerWidth >= 1024);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const activeFullscreen = typeof isFullscreen === "boolean" ? isFullscreen : domFullscreen;
+
+  // In windowed desktop mode with sidebar active, suppress passive canvas toasts to avoid HUD overlap
+  const showToasts =
+    typeof propShowPassiveToasts === "boolean"
+      ? propShowPassiveToasts
+      : (activeFullscreen || !isDesktopWidth || isSidebarOpen === false);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 500);
@@ -99,9 +153,17 @@ export function InGameChatOverlay({
     onOpenChange(false);
   };
 
+  // In windowed desktop mode with sidebar active, suppress passive canvas toasts to avoid HUD overlap
+  if (!isOpen && !showToasts) {
+    return null;
+  }
+
   return (
     <div
-      className="absolute bottom-14 left-4 z-[95] w-80 sm:w-96 max-w-[calc(100%-2rem)] pointer-events-none font-sans select-none"
+      className={cn(
+        "absolute z-[95] w-80 sm:w-96 max-w-[calc(100%-2rem)] pointer-events-none font-sans select-none",
+        placement === "top-left" ? "top-14 left-4" : "bottom-14 left-4"
+      )}
       onKeyDown={(e) => e.stopPropagation()}
       onKeyUp={(e) => e.stopPropagation()}
       onKeyPress={(e) => e.stopPropagation()}
@@ -118,7 +180,7 @@ export function InGameChatOverlay({
               <span className="font-sans font-bold text-xs uppercase tracking-wider text-foreground">
                 Party Chat
               </span>
-              <span className="text-[10px] font-mono text-muted-foreground/80 px-1.5 py-0.2 rounded-full bg-white/[0.05] border border-white/10">
+              <span className="text-[10px] font-mono text-muted-foreground px-1.5 py-0.5 rounded-full bg-white/[0.08] border border-white/15">
                 {participants.length} in room
               </span>
             </div>
@@ -144,8 +206,8 @@ export function InGameChatOverlay({
             className="max-h-36 overflow-y-auto space-y-1.5 pr-1 scroll-smooth"
           >
             {messages.length === 0 ? (
-              <div className="text-center py-4 text-muted-foreground/60 text-[11px] space-y-0.5">
-                <Sparkles className="w-4 h-4 mx-auto mb-1 text-primary/40" />
+              <div className="text-center py-4 text-muted-foreground/85 text-[11px] space-y-0.5">
+                <Sparkles className="w-4 h-4 mx-auto mb-1 text-primary/70" />
                 <p>No messages yet. Send a message or emoji to your party!</p>
               </div>
             ) : (
@@ -207,7 +269,7 @@ export function InGameChatOverlay({
 
           {/* Quick Emoji Reaction Strip */}
           <div className="flex items-center gap-1 overflow-x-auto pt-1 border-t border-white/10">
-            <span className="text-[9px] text-muted-foreground/60 uppercase font-bold pl-1 shrink-0">
+            <span className="text-[9px] text-muted-foreground/85 uppercase font-bold pl-1 shrink-0">
               React:
             </span>
             {EMOJI_REACTIONS.map((emoji) => (
@@ -251,7 +313,7 @@ export function InGameChatOverlay({
               onKeyUp={(e) => e.stopPropagation()}
               onKeyPress={(e) => e.stopPropagation()}
               placeholder="Type message, press Enter to send..."
-              className="h-8 text-xs rounded-xl bg-white/[0.07] border-white/15 focus-visible:ring-primary text-foreground placeholder:text-muted-foreground/60 font-sans"
+              className="h-8 text-xs rounded-xl bg-white/[0.07] border-white/15 focus-visible:ring-primary text-foreground placeholder:text-muted-foreground/80 font-sans"
             />
             <Button
               type="submit"

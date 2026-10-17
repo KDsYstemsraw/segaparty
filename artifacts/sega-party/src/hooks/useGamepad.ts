@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { loadPlayerGamepadMapping, getPlayerActionKey } from "@/lib/gamepadMapping";
 import type { PlayerInputEvent } from "@/lib/webrtc";
 
-const AXIS_THRESHOLD = 0.5;
+const AXIS_THRESHOLD = 0.28;
 
 export function useGamepad(
   playerSlot: number | null,

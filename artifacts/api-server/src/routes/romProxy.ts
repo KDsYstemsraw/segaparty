@@ -1,6 +1,8 @@
 import { Router } from "express";
 import dns from "node:dns";
 import net from "node:net";
+import http from "node:http";
+import https from "node:https";
 import { logger } from "../lib/logger";
 
 export const romProxyRouter = Router();
@@ -8,6 +10,7 @@ export const romProxyRouter = Router();
 const MAX_ROM_BYTES = 250 * 1024 * 1024; // 250 MB max limit
 const REQUEST_TIMEOUT_MS = 10000; // 10 second timeout
 const MAX_REDIRECTS = 3;
+const ALLOWED_PORTS = new Set(["80", "443", "8080", "8443"]);
 
 function isPrivateIPv4(ip: string): boolean {
   const parts = ip.split(".").map(Number);
@@ -27,24 +30,53 @@ function isPrivateIPv4(ip: string): boolean {
 function isPrivateIPv6(ip: string): boolean {
   const lower = ip.toLowerCase();
   if (lower === "::1" || lower === "::") return true; // Loopback & unspecified
+  // Alternative loopback and zero notations: ::0, 0:0:0:0:0:0:0:0, 0:0:0:0:0:0:0:1, ::0001
+  if (/^0*(:0*)*:?0*1?$/.test(lower)) return true;
+
+  // IPv4-mapped IPv6 (::ffff:127.0.0.1)
   if (lower.startsWith("::ffff:")) {
     const v4 = lower.slice(7);
-    return isPrivateIPv4(v4);
+    return isBlockedIP(v4);
   }
+
+  // Deprecated IPv4-compatible IPv6 (::127.0.0.1)
+  if (/^::(?:\d{1,3}\.){3}\d{1,3}$/.test(lower)) {
+    const v4 = lower.slice(2);
+    return isBlockedIP(v4);
+  }
+
   // fe80::/10 (Link-local)
   if (/^fe[89ab]/i.test(lower)) return true;
   // fc00::/7 (Unique local addresses)
   if (/^f[cd]/i.test(lower)) return true;
+  // fec0::/10 (Deprecated site-local)
+  if (/^fec[0-9a-f]/i.test(lower)) return true;
+  // 64:ff9b::/96 (Translation prefix)
+  if (lower.startsWith("64:ff9b:")) return true;
+  // 2002::/16 (6to4 tunneling)
+  if (lower.startsWith("2002:")) return true;
+  // 2001:db8::/32 (Documentation)
+  if (lower.startsWith("2001:db8:")) return true;
+  // 100::/64 (Discard prefix)
+  if (lower.startsWith("100:")) return true;
+
   return false;
 }
 
-function isBlockedIP(ip: string): boolean {
+export function isBlockedIP(ip: string): boolean {
   if (net.isIPv4(ip)) return isPrivateIPv4(ip);
   if (net.isIPv6(ip)) return isPrivateIPv6(ip);
   return true; // Reject unrecognized or malformed IPs
 }
 
-async function validateUrlSecurity(urlStr: string): Promise<{ valid: boolean; url?: URL; error?: string }> {
+interface UrlValidationResult {
+  valid: boolean;
+  url?: URL;
+  resolvedIp?: string;
+  error?: string;
+}
+
+export async function validateUrlSecurity(urlStr: string): Promise<UrlValidationResult> {
   let parsed: URL;
   try {
     parsed = new URL(urlStr);
@@ -66,12 +98,18 @@ async function validateUrlSecurity(urlStr: string): Promise<{ valid: boolean; ur
     return { valid: false, error: "User credentials in URLs are not permitted" };
   }
 
+  // Enforce allowed ports (SEC-11)
+  const effectivePort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  if (!ALLOWED_PORTS.has(effectivePort)) {
+    return { valid: false, error: `Port ${effectivePort} is not permitted for ROM proxying` };
+  }
+
   // If hostname is directly an IP literal
   if (net.isIP(hostname)) {
     if (isBlockedIP(hostname)) {
       return { valid: false, error: "Access to private or restricted network addresses is forbidden" };
     }
-    return { valid: true, url: parsed };
+    return { valid: true, url: parsed, resolvedIp: hostname };
   }
 
   // Resolve hostname DNS and verify all addresses are public
@@ -85,11 +123,70 @@ async function validateUrlSecurity(urlStr: string): Promise<{ valid: boolean; ur
         return { valid: false, error: "Access to private or restricted network addresses is forbidden" };
       }
     }
+    return { valid: true, url: parsed, resolvedIp: addresses[0].address };
   } catch {
     return { valid: false, error: "DNS resolution failed" };
   }
+}
 
-  return { valid: true, url: parsed };
+/**
+ * Executes an HTTP/HTTPS GET request with transport-level DNS pinning.
+ * Prevents TOCTOU DNS rebinding (SEC-10) by enforcing connection to the pre-validated IP.
+ */
+function fetchWithPinnedDns(
+  url: URL,
+  resolvedIp: string,
+  timeoutMs: number,
+): Promise<http.IncomingMessage> {
+  return new Promise((resolve, reject) => {
+    const isHttps = url.protocol === "https:";
+    const client = isHttps ? https : http;
+    const effectivePort = Number(url.port || (isHttps ? 443 : 80));
+
+    // Custom lookup callback pinning the socket to the pre-validated IP
+    const pinLookup = (_hostname: string, options: unknown, callback: (err: Error | null, addresses: unknown, family?: number) => void) => {
+      let cb = callback;
+      let opt = options;
+      if (typeof opt === "function") {
+        cb = opt as (err: Error | null, addresses: unknown, family?: number) => void;
+        opt = {};
+      }
+      const family = net.isIPv6(resolvedIp) ? 6 : 4;
+      if (typeof opt === "object" && opt && (opt as { all?: boolean }).all) {
+        cb(null, [{ address: resolvedIp, family }]);
+      } else {
+        cb(null, resolvedIp, family);
+      }
+    };
+
+    const req = client.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: effectivePort,
+        path: url.pathname + url.search,
+        method: "GET",
+        headers: {
+          "User-Agent": "RetroParty-ROM-Proxy/1.0",
+          "Host": url.host,
+        },
+        lookup: pinLookup as typeof dns.lookup,
+      },
+      (res) => {
+        resolve(res);
+      },
+    );
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error("Upstream ROM request timed out"));
+    });
+
+    req.on("error", (err) => {
+      reject(err);
+    });
+
+    req.end();
+  });
 }
 
 romProxyRouter.get("/rom-proxy", async (req, res) => {
@@ -101,31 +198,23 @@ romProxyRouter.get("/rom-proxy", async (req, res) => {
 
   try {
     let currentUrl = targetUrl;
-    let upstreamRes: Response | null = null;
+    let upstreamRes: http.IncomingMessage | null = null;
 
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const validation = await validateUrlSecurity(currentUrl);
-      if (!validation.valid || !validation.url) {
+      if (!validation.valid || !validation.url || !validation.resolvedIp) {
         res.status(403).json({ error: validation.error || "Blocked URL" });
         return;
       }
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
       try {
-        const resp = await fetch(currentUrl, {
-          redirect: "manual",
-          signal: controller.signal,
-          headers: {
-            "User-Agent": "RetroParty-ROM-Proxy/1.0",
-          },
-        });
-        clearTimeout(timeoutId);
+        const resp = await fetchWithPinnedDns(validation.url, validation.resolvedIp, REQUEST_TIMEOUT_MS);
 
-        // Check for redirects and validate target before following
-        if ([301, 302, 303, 307, 308].includes(resp.status)) {
-          const location = resp.headers.get("location");
+        // Check for redirects and validate destination before following
+        const statusCode = resp.statusCode || 0;
+        if ([301, 302, 303, 307, 308].includes(statusCode)) {
+          const location = resp.headers["location"];
+          resp.resume(); // Discard redirect body
           if (!location) {
             res.status(502).json({ error: "Redirect missing location header" });
             return;
@@ -137,50 +226,53 @@ romProxyRouter.get("/rom-proxy", async (req, res) => {
         upstreamRes = resp;
         break;
       } catch (fetchErr) {
-        clearTimeout(timeoutId);
         logger.warn({ err: fetchErr, currentUrl }, "ROM proxy upstream fetch failed");
         res.status(502).json({ error: "Failed to fetch upstream ROM" });
         return;
       }
     }
 
-    if (!upstreamRes || !upstreamRes.ok || !upstreamRes.body) {
-      res.status(upstreamRes ? upstreamRes.status : 502).json({ error: "Failed to fetch upstream ROM" });
+    if (!upstreamRes || (upstreamRes.statusCode && upstreamRes.statusCode >= 400)) {
+      res.status(upstreamRes?.statusCode || 502).json({ error: "Failed to fetch upstream ROM" });
       return;
     }
 
     // Check Content-Length if present
-    const contentLength = upstreamRes.headers.get("content-length");
+    const contentLength = upstreamRes.headers["content-length"];
     if (contentLength && Number(contentLength) > MAX_ROM_BYTES) {
+      upstreamRes.destroy();
       res.status(413).json({ error: "ROM file exceeds 250MB limit" });
       return;
     }
 
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     res.setHeader("Access-Control-Allow-Origin", "*");
-    const contentType = upstreamRes.headers.get("content-type");
+    const contentType = upstreamRes.headers["content-type"];
     if (contentType) res.setHeader("Content-Type", contentType);
     if (contentLength) res.setHeader("Content-Length", contentLength);
 
     // Stream upstream body with total byte count enforcement
-    const reader = upstreamRes.body.getReader();
     let totalBytes = 0;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.length;
-
+    upstreamRes.on("data", (chunk: Buffer) => {
+      totalBytes += chunk.length;
       if (totalBytes > MAX_ROM_BYTES) {
         logger.warn({ totalBytes, currentUrl }, "ROM proxy download exceeded 250MB cap during streaming");
-        await reader.cancel();
+        upstreamRes?.destroy();
         res.destroy();
         return;
       }
+      res.write(chunk);
+    });
 
-      res.write(Buffer.from(value));
-    }
-    res.end();
+    upstreamRes.on("end", () => {
+      res.end();
+    });
+
+    upstreamRes.on("error", (err) => {
+      logger.warn({ err }, "Error reading upstream ROM body");
+      res.destroy();
+    });
   } catch (err: unknown) {
     logger.warn({ err }, "Unexpected error in ROM proxy");
     if (!res.headersSent) {

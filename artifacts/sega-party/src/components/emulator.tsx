@@ -139,7 +139,7 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
 
       pcmTap.onaudioprocess = (e: AudioProcessingEvent) => {
         const cb = window.__onEmulatorAudioChunk;
-        if (!cb) return;
+        if (!cb || window.__hasActiveRtcPeers) return;
 
         const input = e.inputBuffer.getChannelData(0);
         let hasSound = false;
@@ -479,12 +479,19 @@ export function Emulator({
   const [aspect43, setAspect43] = useState(true);
 
   useEffect(() => {
+    window.__hasActiveRtcPeers = Boolean(hasActiveRtcPeers);
+  }, [hasActiveRtcPeers]);
+
+  useEffect(() => {
     if (!containerRef.current) return;
 
     installWebGLCaptureHook();
     installAudioCaptureHook();
 
+    window.__hasActiveRtcPeers = Boolean(hasActiveRtcPeers);
+
     window.__onEmulatorAudioChunk = (pcmBase64: string, sampleRate: number) => {
+      if (hasActiveRtcPeersRef.current || window.__hasActiveRtcPeers) return;
       onAudioChunkRef.current?.(pcmBase64, sampleRate);
     };
 
