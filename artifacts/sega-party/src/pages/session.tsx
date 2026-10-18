@@ -10,6 +10,7 @@ import {
   RTC_CONFIG,
   getStoredPlayerId,
   getStoredPlayerName,
+  getStoredIsHost,
   setStoredPlayerIdentity,
   type PlayerInputEvent,
   type SlotState,
@@ -211,7 +212,11 @@ export default function SessionPage() {
   });
 
   const romUrl = isReloadingRom ? "" : (currentRomUrl !== null ? currentRomUrl : getRomUrl());
-  const isHost = Boolean(myPlayerId && session?.hostId && myPlayerId === session.hostId);
+  const [isStoredHost] = useState<boolean>(() => getStoredIsHost(code));
+  const isHost = Boolean(
+    (myPlayerId && session?.hostId && myPlayerId === session.hostId) ||
+    isStoredHost
+  );
   const isHostRef = useRef(isHost);
   isHostRef.current = isHost;
 
@@ -928,7 +933,7 @@ export default function SessionPage() {
       if (isHost) {
         setConnectionStatus("connected");
       }
-      const isReturningHost = Boolean(myPlayerId && session?.hostId && myPlayerId === session.hostId);
+      const isReturningHost = Boolean((myPlayerId && session?.hostId && myPlayerId === session.hostId) || isStoredHost);
       ws.send(
         JSON.stringify({
           type: "join",

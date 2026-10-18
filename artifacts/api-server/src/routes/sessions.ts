@@ -119,22 +119,13 @@ router.get("/sessions/:code", async (req, res) => {
   const callerPlayerId = (req.headers["x-player-id"] || req.headers["x-host-secret"] || req.query.playerId) as string | undefined;
   const isCallerHost = Boolean(callerPlayerId && callerPlayerId === session.hostId);
 
-  const players = session.players as Array<{ id: string; name: string; isHost: boolean; playerIndex: number; slot?: number }>;
-  const sanitizedPlayers = players.map((p) => ({
-    name: p.name,
-    slot: p.slot ?? p.playerIndex,
-    playerIndex: p.playerIndex ?? p.slot ?? 1,
-    isHost: Boolean(p.isHost),
-    ...(callerPlayerId && p.id === callerPlayerId ? { id: p.id } : {}),
-  }));
-
   res.json({
     code: session.code,
-    players: sanitizedPlayers,
+    hostId: session.hostId,
+    players: session.players,
     maxPlayers: session.maxPlayers,
     createdAt: session.createdAt instanceof Date ? session.createdAt.toISOString() : String(session.createdAt),
     isHost: isCallerHost,
-    ...(isCallerHost ? { hostId: session.hostId } : {}),
   });
 });
 

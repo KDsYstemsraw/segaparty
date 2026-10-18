@@ -187,7 +187,7 @@ export default function Home() {
       { data: { hostName: hostName.trim() } },
       {
         onSuccess: (session) => {
-          setStoredPlayerIdentity(session.code, session.hostId, hostName.trim());
+          setStoredPlayerIdentity(session.code, session.hostId, hostName.trim(), true);
           setLocation(`/session/${session.code}`);
         },
         onError: () => {
@@ -209,7 +209,7 @@ export default function Home() {
       { code: cleanCode, data: { playerName: joinName.trim() } },
       {
         onSuccess: (response) => {
-          setStoredPlayerIdentity(response.session.code, response.playerId, joinName.trim());
+          setStoredPlayerIdentity(response.session.code, response.playerId, joinName.trim(), false);
           setLocation(`/session/${response.session.code}`);
         },
         onError: () => {

@@ -20,12 +20,22 @@ export function getStoredPlayerName(code: string): string {
   return sessionStorage.getItem(`playerName_${upper}`) || "";
 }
 
-export function setStoredPlayerIdentity(code: string, playerId: string, playerName: string): void {
+export function setStoredPlayerIdentity(code: string, playerId: string, playerName: string, isHost = false): void {
   const upper = code.toUpperCase();
   sessionStorage.setItem(`playerId_${upper}`, playerId);
   sessionStorage.setItem(`playerName_${upper}`, playerName);
+  if (isHost) {
+    sessionStorage.setItem(`isHost_${upper}`, "true");
+  } else {
+    sessionStorage.removeItem(`isHost_${upper}`);
+  }
   sessionStorage.setItem("playerId", playerId);
   sessionStorage.setItem("playerName", playerName);
+}
+
+export function getStoredIsHost(code: string): boolean {
+  const upper = code.toUpperCase();
+  return sessionStorage.getItem(`isHost_${upper}`) === "true";
 }
 
 
