@@ -54,18 +54,18 @@ app.use((req, res, next) => {
     res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
 
-  // Content-Security-Policy: allow scripts for Wasm/EmulatorJS, connect to WebSockets, and Google Fonts
+  // Content-Security-Policy: allow scripts for Wasm/EmulatorJS, connect to WebSockets, blob/data URLs, and Google Fonts
   res.setHeader(
     "Content-Security-Policy",
     [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:",
+      "default-src 'self' blob: data: https:",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data: https:",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com data:",
       "img-src 'self' data: blob: https:",
       "media-src 'self' data: blob:",
-      "connect-src 'self' wss: ws: https://*.google.com https://*.cloudflare.com https:",
-      "worker-src 'self' blob:",
+      "connect-src 'self' wss: ws: blob: data: https:",
+      "worker-src 'self' blob: data:",
       "frame-ancestors 'self'",
     ].join("; "),
   );

@@ -2166,6 +2166,7 @@ export default function SessionPage() {
                   <Emulator
                     key={`${romUrl}-${activeCore}`}
                     romUrl={romUrl}
+                    gameName={activeRomName || getRomName() || undefined}
                     core={activeCore}
                     isFullscreen={isFullscreen}
                     onToggleFullscreen={toggleFullscreen}

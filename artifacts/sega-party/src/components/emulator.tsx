@@ -9,6 +9,7 @@ import {
 
 export interface EmulatorProps {
   romUrl: string;
+  gameName?: string;
   core?: string;
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
@@ -24,6 +25,7 @@ declare global {
   interface Window {
     EJS_player: string;
     EJS_core: string;
+    EJS_gameName?: string;
     EJS_gameUrl: string;
     EJS_pathtodata: string;
     EJS_startOnLoaded: boolean;
@@ -428,6 +430,7 @@ function teardownEmulator() {
   delete (window as unknown as { FS?: unknown }).FS;
   delete (window as unknown as Record<string, unknown>).EJS_player;
   delete (window as unknown as Record<string, unknown>).EJS_core;
+  delete (window as unknown as Record<string, unknown>).EJS_gameName;
   delete (window as unknown as Record<string, unknown>).EJS_gameUrl;
   delete (window as unknown as Record<string, unknown>).EJS_pathtodata;
   delete (window as unknown as Record<string, unknown>).EJS_startOnLoaded;
@@ -445,6 +448,7 @@ function teardownEmulator() {
 
 export function Emulator({
   romUrl,
+  gameName,
   core = "segaMD",
   isFullscreen,
   onToggleFullscreen,
@@ -519,8 +523,34 @@ export function Emulator({
     // Track all pending timers for cleanup
     const pendingTimeouts: ReturnType<typeof setTimeout>[] = [];
 
+    const CORE_EXTENSIONS: Record<string, string> = {
+      segaMD: ".bin",
+      segaCD: ".iso",
+      sega32x: ".32x",
+      segaMS: ".sms",
+      segaGG: ".gg",
+      snes: ".sfc",
+      nes: ".nes",
+      gba: ".gba",
+      gb: ".gb",
+      gbc: ".gbc",
+      n64: ".z64",
+      psx: ".chd",
+    };
+    const fallbackExt = CORE_EXTENSIONS[core] || ".bin";
+    let resolvedName = (gameName || "").trim();
+    if (!resolvedName && romUrl && !romUrl.startsWith("blob:") && !romUrl.startsWith("data:")) {
+      resolvedName = romUrl.split("/").pop()?.split("#")[0]?.split("?")[0] || "";
+    }
+    if (!resolvedName) {
+      resolvedName = `game${fallbackExt}`;
+    } else if (!resolvedName.includes(".")) {
+      resolvedName = `${resolvedName}${fallbackExt}`;
+    }
+
     window.EJS_player = "#game";
     window.EJS_core = core || "segaMD";
+    window.EJS_gameName = resolvedName;
     window.EJS_gameUrl = romUrl;
     window.EJS_pathtodata = "/emulatorjs/";
     window.EJS_startOnLoaded = true;
