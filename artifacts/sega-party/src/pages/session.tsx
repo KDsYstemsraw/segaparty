@@ -91,6 +91,39 @@ const DEFAULT_NICKNAMES = [
   "Mega_Player",
 ];
 
+const mungeSdpFor60Fps = (sdpStr: string): string => {
+  const lines = sdpStr.includes("\r\n") ? sdpStr.split("\r\n") : sdpStr.split("\n");
+  const newLines: string[] = [];
+  let inVideo = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith("m=video")) {
+      inVideo = true;
+      newLines.push(line);
+      // Force high-bandwidth allocation on video section (4 Mbps)
+      newLines.push("b=AS:4000");
+      newLines.push("b=TIAS:4000000");
+      continue;
+    } else if (line.startsWith("m=audio") || line.startsWith("m=application")) {
+      inVideo = false;
+    }
+
+    if (inVideo && line.startsWith("a=fmtp:")) {
+      const match = line.match(/^a=fmtp:(\d+)\s+(.*)$/);
+      if (match) {
+        const pt = match[1];
+        const rest = match[2];
+        // Add start, min, max bitrate and 60 FPS cap to codec parameters
+        newLines.push(`a=fmtp:${pt} ${rest};x-google-start-bitrate=3000;x-google-min-bitrate=1500;x-google-max-bitrate=6000;max-fr=60`);
+        continue;
+      }
+    }
+    newLines.push(line);
+  }
+  return newLines.join("\r\n");
+};
+
 export default function SessionPage() {
   const params = useParams();
   const rawCode = params.code || "";
@@ -536,6 +569,11 @@ export default function SessionPage() {
   // Safe muted video play for 100% autoplay reliability (video engine never stalls)
   const safePlayVideo = useCallback((videoEl: HTMLVideoElement | null) => {
     if (!videoEl) return;
+    if ("playoutDelayHint" in videoEl) {
+      try {
+        (videoEl as any).playoutDelayHint = 0;
+      } catch {}
+    }
     if (!videoEl.paused) return;
     videoEl.muted = true;
     videoEl.play().catch((err) => {
@@ -557,9 +595,11 @@ export default function SessionPage() {
             const offer = await existingPc.createOffer({ iceRestart: true });
             await existingPc.setLocalDescription(offer);
             setWebrtcStatus((prev) => ({ ...prev, lastSignal: `Sent ICE Restart Offer` }));
+            const rawSdp = existingPc.localDescription?.sdp || "";
+            const mungedSdp = mungeSdpFor60Fps(rawSdp);
             sendSignal(guestPeerId, {
               type: "offer",
-              sdp: existingPc.localDescription?.toJSON() || { type: "offer", sdp: existingPc.localDescription?.sdp },
+              sdp: { type: "offer", sdp: mungedSdp },
               isRenegotiation: true,
             });
             return;
@@ -630,19 +670,7 @@ export default function SessionPage() {
                 track.contentHint = "motion";
               } catch {}
             }
-            const sender = pc.addTrack(track, stream);
-            if (track.kind === "video") {
-              try {
-                const params = sender.getParameters();
-                params.degradationPreference = "maintain-framerate";
-                if (!params.encodings || params.encodings.length === 0) {
-                  params.encodings = [{}];
-                }
-                params.encodings[0].maxBitrate = 4_000_000;
-                params.encodings[0].maxFramerate = 60;
-                sender.setParameters(params).catch(() => {});
-              } catch {}
-            }
+            pc.addTrack(track, stream);
           });
         }
 
@@ -671,9 +699,11 @@ export default function SessionPage() {
               }
               const offer = await pc.createOffer({ iceRestart: true });
               await pc.setLocalDescription(offer);
+              const rawSdp = pc.localDescription?.sdp || "";
+              const mungedSdp = mungeSdpFor60Fps(rawSdp);
               sendSignal(guestPeerId, {
                 type: "offer",
-                sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp },
+                sdp: { type: "offer", sdp: mungedSdp },
                 isRenegotiation: true,
               });
             } catch (e) {
@@ -684,10 +714,30 @@ export default function SessionPage() {
 
         const offer = await pc.createOffer(options?.iceRestart ? { iceRestart: true } : undefined);
         await pc.setLocalDescription(offer);
+
+        const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (videoSender) {
+          try {
+            const params = videoSender.getParameters();
+            params.degradationPreference = "maintain-framerate";
+            if (!params.encodings || params.encodings.length === 0) {
+              params.encodings = [{}];
+            }
+            params.encodings[0].maxBitrate = 4_000_000;
+            params.encodings[0].maxFramerate = 60;
+            await videoSender.setParameters(params);
+            console.debug("[WebRTC] Successfully applied maintain-framerate & 60fps on videoSender");
+          } catch (paramErr) {
+            console.warn("[WebRTC] Failed to setParameters after setLocalDescription:", paramErr);
+          }
+        }
+
         setWebrtcStatus((prev) => ({ ...prev, lastSignal: `Sent Offer (${stream?.getTracks().length || 0} tracks)` }));
+        const rawSdp = pc.localDescription?.sdp || "";
+        const mungedSdp = mungeSdpFor60Fps(rawSdp);
         sendSignal(guestPeerId, {
           type: "offer",
-          sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp },
+          sdp: { type: "offer", sdp: mungedSdp },
           isRenegotiation: Boolean(options?.iceRestart),
         });
       } catch (err) {
@@ -755,6 +805,11 @@ export default function SessionPage() {
                   const currentVideoTracks = (videoRef.current.srcObject as MediaStream | null)?.getVideoTracks() || [];
                   if (currentVideoTracks.length !== videoTracks.length || currentVideoTracks[0]?.id !== videoTracks[0]?.id) {
                     videoRef.current.srcObject = new MediaStream(videoTracks);
+                  }
+                  if ("playoutDelayHint" in videoRef.current) {
+                    try {
+                      (videoRef.current as any).playoutDelayHint = 0;
+                    } catch {}
                   }
                   safePlayVideo(videoRef.current);
                 }
@@ -887,7 +942,9 @@ export default function SessionPage() {
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           setWebrtcStatus((prev) => ({ ...prev, lastSignal: "Sent Answer" }));
-          sendSignal(fromPeerId, { type: "answer", sdp: pc.localDescription?.toJSON() || { type: "answer", sdp: pc.localDescription?.sdp } });
+          const rawAnswerSdp = pc.localDescription?.sdp || "";
+          const mungedAnswerSdp = mungeSdpFor60Fps(rawAnswerSdp);
+          sendSignal(fromPeerId, { type: "answer", sdp: { type: "answer", sdp: mungedAnswerSdp } });
           return;
         }
 
@@ -897,6 +954,24 @@ export default function SessionPage() {
           if (pc) {
             const sdpInit = toSdpInit(data.sdp, "answer");
             await pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
+
+            // Re-apply videoSender parameters after answer is negotiated
+            const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
+            if (videoSender) {
+              try {
+                const params = videoSender.getParameters();
+                params.degradationPreference = "maintain-framerate";
+                if (!params.encodings || params.encodings.length === 0) {
+                  params.encodings = [{}];
+                }
+                params.encodings[0].maxBitrate = 4_000_000;
+                params.encodings[0].maxFramerate = 60;
+                await videoSender.setParameters(params);
+                console.debug("[WebRTC] Re-applied maintain-framerate & 60fps on videoSender after setRemoteDescription(answer)");
+              } catch (paramErr) {
+                console.warn("[WebRTC] Failed to re-apply parameters after answer:", paramErr);
+              }
+            }
 
             // Flush any queued ICE candidates for this peer
             const queued = iceCandidateQueueRef.current.get(fromPeerId) || [];
@@ -1466,6 +1541,11 @@ export default function SessionPage() {
       if (currentVideoTracks.length !== videoTracks.length || currentVideoTracks[0]?.id !== videoTracks[0]?.id) {
         videoRef.current.srcObject = new MediaStream(videoTracks);
       }
+      if ("playoutDelayHint" in videoRef.current) {
+        try {
+          (videoRef.current as any).playoutDelayHint = 0;
+        } catch {}
+      }
       safePlayVideo(videoRef.current);
 
       // Auto-trigger playback when video packets begin arriving
@@ -1551,9 +1631,11 @@ export default function SessionPage() {
           pc.addTrack(track, gameStreamRef.current!);
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
+          const rawSdp = pc.localDescription?.sdp || "";
+          const mungedSdp = mungeSdpFor60Fps(rawSdp);
           sendSignal(peerId, {
             type: "offer",
-            sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp },
+            sdp: { type: "offer", sdp: mungedSdp },
             isRenegotiation: true,
           });
         }

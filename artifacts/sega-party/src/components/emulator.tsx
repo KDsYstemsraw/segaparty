@@ -864,14 +864,15 @@ export function Emulator({
       try {
         let videoStream: MediaStream | null = null;
 
-        // Try direct sourceCanvas.captureStream(60) first (works reliably with preserveDrawingBuffer: true)
+        // Try direct sourceCanvas.captureStream() first (works reliably with preserveDrawingBuffer: true)
         const srcCaptureFn =
           sourceCanvas.captureStream ||
-          (sourceCanvas as unknown as { mozCaptureStream?: (fps: number) => MediaStream }).mozCaptureStream;
+          (sourceCanvas as unknown as { mozCaptureStream?: (fps?: number) => MediaStream }).mozCaptureStream;
 
         if (srcCaptureFn) {
           try {
-            videoStream = srcCaptureFn.call(sourceCanvas, 60);
+            // Call without arguments for event-driven capture on canvas buffer swap (avoids software timer aliasing)
+            videoStream = srcCaptureFn.call(sourceCanvas);
           } catch (err) {
             console.warn("Direct sourceCanvas.captureStream failed, falling back to 2D pump:", err);
           }
