@@ -256,6 +256,46 @@ function attachOpenALAudio(): MediaStreamTrack | null {
   return null;
 }
 
+function getOrCreateCaptureTrack(): MediaStreamTrack | null {
+  if (typeof window === "undefined") return null;
+
+  let ctx = activeAudioCtx;
+  if (!ctx || ctx.state === "closed") {
+    ctx = getOpenALContext()?.audioCtx || null;
+  }
+
+  if (!ctx || ctx.state === "closed") {
+    const AudioCtxClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (AudioCtxClass) {
+      try {
+        ctx = new AudioCtxClass() as ExtendedAudioContext;
+        activeAudioCtx = ctx;
+        trackedAudioContexts.add(ctx);
+        console.debug("[audio-host] Persistent host AudioContext created for frame-0 capture");
+      } catch (e) {
+        console.warn("[audio-host] Failed to create persistent AudioContext:", e);
+      }
+    }
+  }
+
+  if (ctx) {
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
+    const { track } = ensureCaptureBus(ctx);
+    if (track) return track;
+  }
+
+  if (window.__emulatorAudioStream) {
+    const tracks = window.__emulatorAudioStream.getAudioTracks();
+    if (tracks.length > 0) return tracks[0];
+  }
+
+  return null;
+}
+
 // Intercept Web Audio connections so emulator audio is mirrored to a MediaStream and PCM tap
 function installAudioCaptureHook() {
   if (typeof window === "undefined") return;
@@ -758,10 +798,12 @@ export function Emulator({
         const composite = new MediaStream();
         composite.addTrack(videoTracks[0]);
 
-        const initialAudioTrack = attachOpenALAudio();
-        if (initialAudioTrack) {
-          composite.addTrack(initialAudioTrack);
+        // Ensure an audio track is ALWAYS present in composite from frame 0
+        const audioTrack = attachOpenALAudio() || getOrCreateCaptureTrack();
+        if (audioTrack && !composite.getAudioTracks().includes(audioTrack)) {
+          composite.addTrack(audioTrack);
           audioTrackFiredRef.current = true;
+          console.debug("[audio-host] Initial composite stream bundled with audio track:", audioTrack.id);
         }
 
         streamReadyFired.current = true;
@@ -780,6 +822,9 @@ export function Emulator({
 
     window.EJS_onGameStart = () => {
       syncAllControls();
+      if (activeAudioCtx && activeAudioCtx.state === "suspended") {
+        activeAudioCtx.resume().catch(() => {});
+      }
       attachOpenALAudio();
       if (tryCapture()) return;
       pendingTimeouts.push(setTimeout(tryCapture, 400));
@@ -789,6 +834,9 @@ export function Emulator({
 
     // Persistent 1-second audio poll to attach new dynamic OpenAL sources and handle late audio initialization
     audioPollId = setInterval(() => {
+      if (activeAudioCtx && activeAudioCtx.state === "suspended") {
+        activeAudioCtx.resume().catch(() => {});
+      }
       const track = attachOpenALAudio();
       if (track && !audioTrackFiredRef.current) {
         audioTrackFiredRef.current = true;
