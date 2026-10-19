@@ -81,6 +81,14 @@ interface OpenALContext {
 let activeAudioCtx: ExtendedAudioContext | null = null;
 const trackedAudioContexts = new Set<ExtendedAudioContext>();
 
+const OriginalAudioContext =
+  typeof window !== "undefined"
+    ? window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+    : undefined;
+
+let activeAudioTrackListener: ((track: MediaStreamTrack) => void) | null = null;
+
 function getOpenALContext(): OpenALContext | null {
   if (typeof window === "undefined") return null;
   const win = window as unknown as {
@@ -141,7 +149,7 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
 
       pcmTap.onaudioprocess = (e: AudioProcessingEvent) => {
         const cb = window.__onEmulatorAudioChunk;
-        if (!cb || window.__hasActiveRtcPeers) return;
+        if (!cb) return;
 
         const input = e.inputBuffer.getChannelData(0);
         let hasSound = false;
@@ -199,6 +207,20 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
     streamDest: audioCtx.__streamDest,
     track,
   };
+}
+
+export function getSharedHostAudioContext(): ExtendedAudioContext | null {
+  if (typeof window === "undefined" || !OriginalAudioContext) return null;
+  if (!activeAudioCtx || activeAudioCtx.state === "closed") {
+    try {
+      activeAudioCtx = new OriginalAudioContext() as ExtendedAudioContext;
+      trackedAudioContexts.add(activeAudioCtx);
+      console.debug("[audio-host] Initialized shared host AudioContext");
+    } catch (e) {
+      console.warn("[audio-host] Failed to create shared host AudioContext:", e);
+    }
+  }
+  return activeAudioCtx;
 }
 
 function attachOpenALAudio(): MediaStreamTrack | null {
@@ -265,19 +287,7 @@ function getOrCreateCaptureTrack(): MediaStreamTrack | null {
   }
 
   if (!ctx || ctx.state === "closed") {
-    const AudioCtxClass =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (AudioCtxClass) {
-      try {
-        ctx = new AudioCtxClass() as ExtendedAudioContext;
-        activeAudioCtx = ctx;
-        trackedAudioContexts.add(ctx);
-        console.debug("[audio-host] Persistent host AudioContext created for frame-0 capture");
-      } catch (e) {
-        console.warn("[audio-host] Failed to create persistent AudioContext:", e);
-      }
-    }
+    ctx = getSharedHostAudioContext();
   }
 
   if (ctx) {
@@ -298,13 +308,37 @@ function getOrCreateCaptureTrack(): MediaStreamTrack | null {
 
 // Intercept Web Audio connections so emulator audio is mirrored to a MediaStream and PCM tap
 function installAudioCaptureHook() {
-  if (typeof window === "undefined") return;
-  const AudioContextClass =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextClass || (AudioContextClass as unknown as { __patched?: boolean }).__patched) return;
+  if (typeof window === "undefined" || !OriginalAudioContext) return;
 
-  const proto = AudioNode.prototype as unknown as { connect: (...args: unknown[]) => unknown };
+  // 1. AudioContext Proxy Unification:
+  // Guarantee EmulatorJS, Emscripten OpenAL, and SDL all share the exact same AudioContext instance
+  if (!(OriginalAudioContext as unknown as { __audioContextProxied?: boolean }).__audioContextProxied) {
+    const AudioContextProxy = new Proxy(OriginalAudioContext, {
+      construct(target, args, newTarget) {
+        const shared = getSharedHostAudioContext();
+        if (shared) {
+          if (shared.state === "suspended") {
+            shared.resume().catch(() => {});
+          }
+          return shared;
+        }
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+
+    window.AudioContext = AudioContextProxy as unknown as typeof AudioContext;
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext =
+      AudioContextProxy as unknown as typeof AudioContext;
+
+    (OriginalAudioContext as unknown as { __audioContextProxied: boolean }).__audioContextProxied = true;
+  }
+
+  // 2. AudioNode.prototype.connect interception:
+  const proto = AudioNode.prototype as unknown as {
+    connect: (...args: unknown[]) => unknown;
+    __audioConnectPatched?: boolean;
+  };
+  if (proto.__audioConnectPatched) return;
   const origConnect = proto.connect;
 
   proto.connect = function (this: AudioNode, destination: unknown, ...rest: unknown[]) {
@@ -326,6 +360,11 @@ function installAudioCaptureHook() {
             origConnect.call(this, bus);
             attached.add(this);
             console.debug("[audio-host] source attached");
+
+            const newTrack = ctx.__streamDest?.stream.getAudioTracks()[0];
+            if (newTrack) {
+              activeAudioTrackListener?.(newTrack);
+            }
           } catch {}
         }
       }
@@ -335,7 +374,7 @@ function installAudioCaptureHook() {
     return origConnect.call(this, destination, ...rest);
   };
 
-  (AudioContextClass as unknown as { __patched: boolean }).__patched = true;
+  proto.__audioConnectPatched = true;
 }
 
 // Call hooks immediately upon module import
@@ -397,6 +436,7 @@ function teardownEmulator() {
   document.querySelectorAll('head link[href*="emulatorjs/"]').forEach((s) => s.remove());
 
   // 5. Clean up audio contexts & streams (QA-02 AudioContext leak fix)
+  activeAudioTrackListener = null;
   const contextsToClose = new Set<ExtendedAudioContext>();
   if (activeAudioCtx) contextsToClose.add(activeAudioCtx);
   const alCtx = getOpenALContext();
@@ -501,7 +541,7 @@ export function Emulator({
 }: EmulatorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const streamReadyFired = useRef(false);
-  const audioTrackFiredRef = useRef(false);
+  const lastEmittedAudioTrackIdRef = useRef<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const hasActiveRtcPeersRef = useRef(hasActiveRtcPeers);
@@ -535,7 +575,6 @@ export function Emulator({
     window.__hasActiveRtcPeers = Boolean(hasActiveRtcPeers);
 
     window.__onEmulatorAudioChunk = (pcmBase64: string, sampleRate: number) => {
-      if (hasActiveRtcPeersRef.current || window.__hasActiveRtcPeers) return;
       onAudioChunkRef.current?.(pcmBase64, sampleRate);
     };
 
@@ -558,7 +597,15 @@ export function Emulator({
     }
 
     streamReadyFired.current = false;
-    audioTrackFiredRef.current = false;
+    lastEmittedAudioTrackIdRef.current = null;
+
+    activeAudioTrackListener = (track: MediaStreamTrack) => {
+      if (track && track.id !== lastEmittedAudioTrackIdRef.current) {
+        lastEmittedAudioTrackIdRef.current = track.id;
+        console.debug("[audio-host] Emitting new live audio track:", track.id);
+        onAudioTrackAddedRef.current?.(track);
+      }
+    };
 
     // Track all pending timers for cleanup
     const pendingTimeouts: ReturnType<typeof setTimeout>[] = [];
@@ -802,7 +849,7 @@ export function Emulator({
         const audioTrack = attachOpenALAudio() || getOrCreateCaptureTrack();
         if (audioTrack && !composite.getAudioTracks().includes(audioTrack)) {
           composite.addTrack(audioTrack);
-          audioTrackFiredRef.current = true;
+          lastEmittedAudioTrackIdRef.current = audioTrack.id;
           console.debug("[audio-host] Initial composite stream bundled with audio track:", audioTrack.id);
         }
 
@@ -838,8 +885,9 @@ export function Emulator({
         activeAudioCtx.resume().catch(() => {});
       }
       const track = attachOpenALAudio();
-      if (track && !audioTrackFiredRef.current) {
-        audioTrackFiredRef.current = true;
+      if (track && track.id !== lastEmittedAudioTrackIdRef.current) {
+        lastEmittedAudioTrackIdRef.current = track.id;
+        console.debug("[audio-host] Emitting new live audio track:", track.id);
         onAudioTrackAddedRef.current?.(track);
       }
     }, 1000);

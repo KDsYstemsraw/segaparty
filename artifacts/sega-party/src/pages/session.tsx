@@ -147,6 +147,7 @@ export default function SessionPage() {
     (typeof document !== "undefined" ? document.body : null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const guestAudioElRef = useRef<HTMLAudioElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
 
   // Modals state
@@ -1106,14 +1107,15 @@ export default function SessionPage() {
         }
 
         if (msg.type === "audio-chunk" && !isHost) {
-          const hasLiveRtcAudio = Boolean(
-            rtcVideoActiveRef.current &&
-            remoteStream &&
-            remoteStream.getAudioTracks().some((t) => t.readyState === "live" && !t.muted)
+          const isRtcAudioPlaying = Boolean(
+            guestAudioElRef.current &&
+            !guestAudioElRef.current.paused &&
+            !guestAudioElRef.current.muted &&
+            guestAudioElRef.current.currentTime > 0
           );
 
-          if (hasLiveRtcAudio) {
-            // WebRTC audio is active; ensure gain reflects current mute/volume state and skip WS PCM fallback
+          if (isRtcAudioPlaying) {
+            // WebRTC audio is actively playing through <audio>; ensure gain reflects current mute/volume state and skip WS PCM fallback
             if (guestGainNodeRef.current) {
               guestGainNodeRef.current.gain.value = isMutedRef.current ? 0 : volumeRef.current;
             }
@@ -1302,10 +1304,22 @@ export default function SessionPage() {
     };
   }, []);
 
-  // Bind remote stream to HTML5 video element with auto-recovery and WebAudio pipeline (QA2-04)
+  // Bind remote stream to HTML5 video/audio elements with auto-recovery and WebAudio pipeline (QA2-04)
   useEffect(() => {
     if (remoteStream && remoteStream.getAudioTracks().length > 0) {
       attachGuestWebAudio(remoteStream);
+    }
+
+    if (guestAudioElRef.current && remoteStream) {
+      if (guestAudioElRef.current.srcObject !== remoteStream) {
+        guestAudioElRef.current.srcObject = remoteStream;
+      }
+      guestAudioElRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+      guestAudioElRef.current.muted = isMutedRef.current;
+      guestAudioElRef.current.play().catch((err) => {
+        console.debug("[audio-guest] <audio> autoplay waiting for user gesture:", err);
+        setAudioBlocked(true);
+      });
     }
 
     if (videoRef.current && remoteStream) {
@@ -1328,6 +1342,9 @@ export default function SessionPage() {
         track.onunmute = () => {
           console.debug(`[audio] Remote audio track unmuted: ${track.id}`);
           attachGuestWebAudio(remoteStream);
+          if (guestAudioElRef.current) {
+            guestAudioElRef.current.play().catch(() => {});
+          }
         };
       });
     }
@@ -1339,6 +1356,10 @@ export default function SessionPage() {
     volumeRef.current = volume;
     if (guestGainNodeRef.current) {
       guestGainNodeRef.current.gain.value = isMuted ? 0 : volume;
+    }
+    if (guestAudioElRef.current) {
+      guestAudioElRef.current.volume = isMuted ? 0 : volume;
+      guestAudioElRef.current.muted = isMuted;
     }
     if (videoRef.current) {
       videoRef.current.muted = true;
@@ -1367,11 +1388,25 @@ export default function SessionPage() {
   // Late audio track addition from emulator
   const handleAudioTrackAdded = useCallback((track: MediaStreamTrack) => {
     if (!gameStreamRef.current) return;
+    // Cleanly replace old audio tracks in gameStreamRef
+    const oldAudioTracks = gameStreamRef.current.getAudioTracks();
+    oldAudioTracks.forEach((t) => {
+      if (t !== track) {
+        gameStreamRef.current?.removeTrack(t);
+      }
+    });
     if (!gameStreamRef.current.getAudioTracks().includes(track)) {
       gameStreamRef.current.addTrack(track);
-      // Add track to existing peer connections
-      peerConnsRef.current.forEach(async (pc, peerId) => {
-        try {
+    }
+
+    // Replace track on existing peer connections using RTCRtpSender.replaceTrack
+    peerConnsRef.current.forEach(async (pc, peerId) => {
+      try {
+        const audioSender = pc.getSenders().find((s) => s.track?.kind === "audio" || (s.track && oldAudioTracks.includes(s.track)));
+        if (audioSender) {
+          await audioSender.replaceTrack(track);
+          console.debug(`[WebRTC] Successfully replaced audio track for peer ${peerId} via replaceTrack:`, track.id);
+        } else {
           pc.addTrack(track, gameStreamRef.current!);
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
@@ -1380,9 +1415,11 @@ export default function SessionPage() {
             sdp: pc.localDescription?.toJSON() || { type: "offer", sdp: pc.localDescription?.sdp },
             isRenegotiation: true,
           });
-        } catch {}
-      });
-    }
+        }
+      } catch (err) {
+        console.warn(`[WebRTC] Failed to update audio track for peer ${peerId}:`, err);
+      }
+    });
   }, [sendSignal]);
 
   // Host dual-transport video frame broadcasting over WebSocket for instant guest view (throttled when RTC is active, QA-01)
@@ -1784,48 +1821,27 @@ export default function SessionPage() {
 
   const unlockAudio = useCallback(() => {
     console.debug("[audio] unlock called");
-    setIsMuted(false);
-    isMutedRef.current = false;
-    setAudioBlocked(false);
-
+    if (guestAudioElRef.current) {
+      guestAudioElRef.current.muted = false;
+      guestAudioElRef.current.volume = volumeRef.current;
+      guestAudioElRef.current.play().catch(() => {});
+    }
     if (videoRef.current) {
-      videoRef.current.muted = true;
-      videoRef.current.play().catch((err) => {
-        console.debug("[audio] video.play() failed on unlock:", err);
-      });
+      safePlayVideo(videoRef.current);
     }
-
-    try {
-      const AudioCtxClass =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioCtxClass) {
-        if (!guestAudioCtxRef.current) {
-          guestAudioCtxRef.current = new AudioCtxClass();
-        }
-        const ctx = guestAudioCtxRef.current;
-        if (ctx.state === "suspended") {
-          ctx.resume().catch((err) => {
-            console.debug("[audio] AudioContext resume failed on unlock:", err);
-          });
-        }
-        if (!guestGainNodeRef.current) {
-          const gain = ctx.createGain();
-          gain.gain.value = volumeRef.current;
-          gain.connect(ctx.destination);
-          guestGainNodeRef.current = gain;
-        } else {
-          guestGainNodeRef.current.gain.value = volumeRef.current;
-        }
-      }
-    } catch (err) {
-      console.debug("[audio] Error unlocking AudioContext:", err);
+    if (guestAudioCtxRef.current && guestAudioCtxRef.current.state === "suspended") {
+      guestAudioCtxRef.current.resume().catch(() => {});
     }
-
+    if (guestGainNodeRef.current) {
+      guestGainNodeRef.current.gain.value = volumeRef.current;
+    }
     if (remoteStreamRef.current) {
       attachGuestWebAudio(remoteStreamRef.current);
     }
-  }, [attachGuestWebAudio]);
+    setAudioBlocked(false);
+    setIsMuted(false);
+    isMutedRef.current = false;
+  }, [safePlayVideo, attachGuestWebAudio]);
 
   // One-time listener to unlock audio on first keypress or pointerdown anywhere on page
   useEffect(() => {
@@ -1834,12 +1850,10 @@ export default function SessionPage() {
     const handleFirstInteraction = () => {
       console.debug("[audio] First user interaction on guest page, unlocking audio");
       unlockAudio();
-      window.removeEventListener("keydown", handleFirstInteraction, true);
-      window.removeEventListener("pointerdown", handleFirstInteraction, true);
     };
 
-    window.addEventListener("keydown", handleFirstInteraction, true);
-    window.addEventListener("pointerdown", handleFirstInteraction, true);
+    window.addEventListener("keydown", handleFirstInteraction, { once: true, capture: true });
+    window.addEventListener("pointerdown", handleFirstInteraction, { once: true, capture: true });
 
     return () => {
       window.removeEventListener("keydown", handleFirstInteraction, true);
@@ -2344,6 +2358,9 @@ export default function SessionPage() {
                       alt="Game Stream"
                       className={`w-full h-full object-contain absolute inset-0 z-0 ${hasWsStream ? "opacity-100" : "opacity-0 pointer-events-none"}`}
                     />
+
+                    {/* Dedicated Guest Audio Element (unmuted for hardware audio decoding) */}
+                    <audio ref={guestAudioElRef} autoPlay playsInline />
 
                     {/* WebRTC Video Stream - transparent until decoding active frames */}
                     <video
