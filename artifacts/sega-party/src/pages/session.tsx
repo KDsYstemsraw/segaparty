@@ -114,6 +114,7 @@ export default function SessionPage() {
   const wsRetryCountRef = useRef<number>(0);
   const wsImgRef = useRef<HTMLImageElement | null>(null);
   const nextAudioTimeRef = useRef<number>(0);
+  const lastAudioChunkSentRef = useRef<number>(0);
   const rtcVideoActiveRef = useRef(false);
   const lastVideoTimeRef = useRef<{ time: number; timestamp: number }>({ time: 0, timestamp: 0 });
 
@@ -1110,8 +1111,7 @@ export default function SessionPage() {
           const isRtcAudioPlaying = Boolean(
             guestAudioElRef.current &&
             !guestAudioElRef.current.paused &&
-            !guestAudioElRef.current.muted &&
-            guestAudioElRef.current.currentTime > 0
+            !guestAudioElRef.current.muted
           );
 
           if (isRtcAudioPlaying) {
@@ -1474,30 +1474,9 @@ export default function SessionPage() {
       const guests = participantsRef.current.filter((p) => p.peerId !== myPeerId.current);
       if (guests.length === 0 && peerConnsRef.current.size === 0) return;
 
-      // Only broadcast WS audio chunk if at least one guest is not yet fully connected via WebRTC
-      let anyGuestNeedsFallback = false;
-      if (guests.length > 0) {
-        anyGuestNeedsFallback = guests.some((guest) => {
-          const pc = peerConnsRef.current.get(guest.peerId);
-          if (!pc) return true;
-          const isConnected =
-            pc.connectionState === "connected" ||
-            (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed");
-          return !isConnected;
-        });
-      } else {
-        for (const [, pc] of peerConnsRef.current) {
-          const isConnected =
-            pc.connectionState === "connected" ||
-            (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed");
-          if (!isConnected) {
-            anyGuestNeedsFallback = true;
-            break;
-          }
-        }
-      }
-
-      if (!anyGuestNeedsFallback) return;
+      const now = performance.now();
+      if (now - lastAudioChunkSentRef.current < 40) return;
+      lastAudioChunkSentRef.current = now;
 
       wsRef.current.send(
         JSON.stringify({
@@ -1822,6 +1801,9 @@ export default function SessionPage() {
   const unlockAudio = useCallback(() => {
     console.debug("[audio] unlock called");
     if (guestAudioElRef.current) {
+      if (remoteStreamRef.current && guestAudioElRef.current.srcObject !== remoteStreamRef.current) {
+        guestAudioElRef.current.srcObject = remoteStreamRef.current;
+      }
       guestAudioElRef.current.muted = false;
       guestAudioElRef.current.volume = volumeRef.current;
       guestAudioElRef.current.play().catch(() => {});
@@ -1829,11 +1811,28 @@ export default function SessionPage() {
     if (videoRef.current) {
       safePlayVideo(videoRef.current);
     }
+    const AudioCtxClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!guestAudioCtxRef.current && AudioCtxClass) {
+      try {
+        guestAudioCtxRef.current = new AudioCtxClass();
+      } catch {}
+    }
     if (guestAudioCtxRef.current && guestAudioCtxRef.current.state === "suspended") {
       guestAudioCtxRef.current.resume().catch(() => {});
     }
-    if (guestGainNodeRef.current) {
-      guestGainNodeRef.current.gain.value = volumeRef.current;
+    if (guestAudioCtxRef.current) {
+      if (!guestGainNodeRef.current) {
+        try {
+          const gain = guestAudioCtxRef.current.createGain();
+          gain.gain.value = volumeRef.current;
+          gain.connect(guestAudioCtxRef.current.destination);
+          guestGainNodeRef.current = gain;
+        } catch {}
+      } else {
+        guestGainNodeRef.current.gain.value = volumeRef.current;
+      }
     }
     if (remoteStreamRef.current) {
       attachGuestWebAudio(remoteStreamRef.current);
@@ -2360,7 +2359,22 @@ export default function SessionPage() {
                     />
 
                     {/* Dedicated Guest Audio Element (unmuted for hardware audio decoding) */}
-                    <audio ref={guestAudioElRef} autoPlay playsInline />
+                    <audio
+                      ref={(el) => {
+                        guestAudioElRef.current = el;
+                        if (el && remoteStream && el.srcObject !== remoteStream) {
+                          el.srcObject = remoteStream;
+                          el.volume = isMutedRef.current ? 0 : volumeRef.current;
+                          el.muted = isMutedRef.current;
+                          el.play().catch((err) => {
+                            console.debug("[audio-guest] <audio> autoplay waiting for user gesture:", err);
+                            setAudioBlocked(true);
+                          });
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                    />
 
                     {/* WebRTC Video Stream - transparent until decoding active frames */}
                     <video

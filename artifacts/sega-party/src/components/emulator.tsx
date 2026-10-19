@@ -75,6 +75,7 @@ interface ExtendedAudioContext extends AudioContext {
 
 interface OpenALContext {
   audioCtx: ExtendedAudioContext;
+  gain?: AudioNode;
   sources?: Record<string, { gain?: AudioNode } | undefined> | Array<{ gain?: AudioNode } | undefined>;
 }
 
@@ -236,9 +237,22 @@ function attachOpenALAudio(): MediaStreamTrack | null {
       }).catch(() => {});
     }
 
+    const attached = audioCtx.__attachedSources || (audioCtx.__attachedSources = new WeakSet<AudioNode>());
+
+    // Connect OpenAL master listener gain if available
+    const alCtxGain = (alCtx as unknown as { gain?: AudioNode }).gain;
+    if (alCtxGain && !attached.has(alCtxGain)) {
+      try {
+        alCtxGain.connect(bus);
+        attached.add(alCtxGain);
+        console.debug("[audio-host] master listener gain attached");
+      } catch (e) {
+        console.warn("[audio-host] failed to connect master gain:", e);
+      }
+    }
+
     const sources = alCtx.sources;
     if (sources) {
-      const attached = audioCtx.__attachedSources || (audioCtx.__attachedSources = new WeakSet<AudioNode>());
       for (const key in sources) {
         const src = (sources as Record<string, { gain?: AudioNode } | undefined>)[key];
         if (src?.gain && !attached.has(src.gain)) {
@@ -260,6 +274,49 @@ function attachOpenALAudio(): MediaStreamTrack | null {
       }
       return track;
     }
+  }
+
+  // Fallback to EmulatorJS built-in audio capture via collectScreenRecordingMediaTracks
+  try {
+    const win = window as unknown as {
+      EJS_emulator?: {
+        collectScreenRecordingMediaTracks?: (canvas: HTMLCanvasElement, fps: number) => MediaStreamTrack[] | MediaStream | null;
+      };
+    };
+    if (typeof win.EJS_emulator?.collectScreenRecordingMediaTracks === "function") {
+      const targetCanvas = (document.querySelector("#game canvas") as HTMLCanvasElement) || document.createElement("canvas");
+      const res = win.EJS_emulator.collectScreenRecordingMediaTracks(targetCanvas, 60);
+      if (res) {
+        const ejsTracks: MediaStreamTrack[] = Array.isArray(res)
+          ? res
+          : (typeof (res as MediaStream).getTracks === "function" ? (res as MediaStream).getAudioTracks() : []);
+        const audioTrack = ejsTracks.find((t: MediaStreamTrack) => t.kind === "audio");
+        if (audioTrack) {
+          console.debug("[audio-host] Found EmulatorJS built-in audio track:", audioTrack.id);
+          if (!window.__emulatorAudioStream) {
+            window.__emulatorAudioStream = new MediaStream([audioTrack]);
+          }
+          if (activeAudioCtx && typeof activeAudioCtx.createMediaStreamSource === "function") {
+            try {
+              const attached = activeAudioCtx.__attachedSources || (activeAudioCtx.__attachedSources = new WeakSet<AudioNode>());
+              const streamSource = activeAudioCtx.createMediaStreamSource(new MediaStream([audioTrack]));
+              if (!attached.has(streamSource)) {
+                const { bus } = ensureCaptureBus(activeAudioCtx);
+                streamSource.connect(bus);
+                attached.add(streamSource);
+              }
+            } catch {}
+          }
+          if (!(audioTrack as unknown as { __loggedReady?: boolean }).__loggedReady) {
+            (audioTrack as unknown as { __loggedReady?: boolean }).__loggedReady = true;
+            console.debug("[audio-host] track ready", audioTrack.id);
+          }
+          return audioTrack;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[audio-host] EmulatorJS collectScreenRecordingMediaTracks fallback error:", e);
   }
 
   // Fallback to window.__emulatorAudioStream if available
@@ -569,15 +626,6 @@ export function Emulator({
   useEffect(() => {
     if (!containerRef.current) return;
 
-    installWebGLCaptureHook();
-    installAudioCaptureHook();
-
-    window.__hasActiveRtcPeers = Boolean(hasActiveRtcPeers);
-
-    window.__onEmulatorAudioChunk = (pcmBase64: string, sampleRate: number) => {
-      onAudioChunkRef.current?.(pcmBase64, sampleRate);
-    };
-
     // Clean up any existing emulator instances, WebGL contexts, or DOM nodes
     teardownEmulator();
 
@@ -595,6 +643,15 @@ export function Emulator({
       window.__emulatorAudioStream.getTracks().forEach((t) => t.stop());
       window.__emulatorAudioStream = null;
     }
+
+    installWebGLCaptureHook();
+    installAudioCaptureHook();
+
+    window.__hasActiveRtcPeers = Boolean(hasActiveRtcPeers);
+
+    window.__onEmulatorAudioChunk = (pcmBase64: string, sampleRate: number) => {
+      onAudioChunkRef.current?.(pcmBase64, sampleRate);
+    };
 
     streamReadyFired.current = false;
     lastEmittedAudioTrackIdRef.current = null;
@@ -683,10 +740,15 @@ export function Emulator({
         }).catch(() => {});
       }
       const alCtx = getOpenALContext();
-      if (alCtx?.audioCtx && alCtx.audioCtx !== activeAudioCtx && alCtx.audioCtx.state === "suspended") {
+      if (alCtx?.audioCtx && alCtx.audioCtx.state === "suspended") {
         alCtx.audioCtx.resume().then(() => {
-          console.debug("[audio-host] ctx resumed");
+          console.debug("[audio-host] alCtx resumed");
         }).catch(() => {});
+      }
+      for (const ctx of trackedAudioContexts) {
+        if (ctx && ctx.state === "suspended") {
+          ctx.resume().catch(() => {});
+        }
       }
     };
     window.addEventListener("pointerdown", resumeSuspendedAudio);
@@ -872,6 +934,10 @@ export function Emulator({
       if (activeAudioCtx && activeAudioCtx.state === "suspended") {
         activeAudioCtx.resume().catch(() => {});
       }
+      const alCtx = getOpenALContext();
+      if (alCtx?.audioCtx && alCtx.audioCtx.state === "suspended") {
+        alCtx.audioCtx.resume().catch(() => {});
+      }
       attachOpenALAudio();
       if (tryCapture()) return;
       pendingTimeouts.push(setTimeout(tryCapture, 400));
@@ -883,6 +949,10 @@ export function Emulator({
     audioPollId = setInterval(() => {
       if (activeAudioCtx && activeAudioCtx.state === "suspended") {
         activeAudioCtx.resume().catch(() => {});
+      }
+      const alCtx = getOpenALContext();
+      if (alCtx?.audioCtx && alCtx.audioCtx.state === "suspended") {
+        alCtx.audioCtx.resume().catch(() => {});
       }
       const track = attachOpenALAudio();
       if (track && track.id !== lastEmittedAudioTrackIdRef.current) {
