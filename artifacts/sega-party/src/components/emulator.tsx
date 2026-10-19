@@ -41,6 +41,7 @@ declare global {
     __emulatorAudioStream?: MediaStream | null;
     __onEmulatorAudioChunk?: (pcmBase64: string, sampleRate: number) => void;
     __hasActiveRtcPeers?: boolean;
+    __strongAudioNodes?: Set<AudioNode>;
   }
 }
 
@@ -71,6 +72,7 @@ interface ExtendedAudioContext extends AudioContext {
   __pcmTap?: ScriptProcessorNode;
   __silentGain?: GainNode;
   __attachedSources?: WeakSet<AudioNode>;
+  __openALAttached?: boolean;
 }
 
 interface OpenALContext {
@@ -81,6 +83,7 @@ interface OpenALContext {
 
 let activeAudioCtx: ExtendedAudioContext | null = null;
 const trackedAudioContexts = new Set<ExtendedAudioContext>();
+const strongAudioNodes = new Set<AudioNode>();
 
 const OriginalAudioContext =
   typeof window !== "undefined"
@@ -88,7 +91,7 @@ const OriginalAudioContext =
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
     : undefined;
 
-let activeAudioTrackListener: ((track: MediaStreamTrack) => void) | null = null;
+let activeAudioTrackListener: ((track: MediaStreamTrack, force?: boolean) => void) | null = null;
 
 function getOpenALContext(): OpenALContext | null {
   if (typeof window === "undefined") return null;
@@ -118,13 +121,29 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
 } {
   activeAudioCtx = audioCtx;
   trackedAudioContexts.add(audioCtx);
+  if (typeof window !== "undefined") {
+    window.__strongAudioNodes = strongAudioNodes;
+  }
 
   if (!audioCtx.__captureBus) {
     const bus = audioCtx.createGain();
     bus.gain.value = 1.0;
     (bus as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
     audioCtx.__captureBus = bus;
+    strongAudioNodes.add(bus);
     console.debug("[audio-host] bus created");
+
+    // Kickstart MediaStreamAudioDestinationNode at frame 0 with an inaudible keepalive source
+    try {
+      if (typeof audioCtx.createConstantSource === "function") {
+        const keepalive = audioCtx.createConstantSource();
+        keepalive.offset.value = 0.00001;
+        (keepalive as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
+        keepalive.connect(bus);
+        keepalive.start();
+        strongAudioNodes.add(keepalive);
+      }
+    } catch {}
   }
   const bus = audioCtx.__captureBus;
 
@@ -133,6 +152,7 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
       const dest = audioCtx.createMediaStreamDestination();
       bus.connect(dest);
       audioCtx.__streamDest = dest;
+      strongAudioNodes.add(dest);
       window.__emulatorAudioStream = dest.stream;
     } catch (e) {
       console.warn("[audio-host] failed to create media stream destination:", e);
@@ -142,9 +162,9 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
   // Setup ScriptProcessor for PCM tap if not already set up
   if (!audioCtx.__pcmTap && typeof audioCtx.createScriptProcessor === "function") {
     try {
-      const pcmTap = audioCtx.createScriptProcessor(2048, 1, 1);
+      const pcmTap = audioCtx.createScriptProcessor(2048, 2, 1);
       const silentGain = audioCtx.createGain();
-      silentGain.gain.value = 0;
+      silentGain.gain.value = 0.00001; // -100dB inaudible keepalive prevents Chromium dead-cutting
       (pcmTap as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
       (silentGain as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
 
@@ -152,28 +172,30 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
         const cb = window.__onEmulatorAudioChunk;
         if (!cb) return;
 
-        const input = e.inputBuffer.getChannelData(0);
-        let hasSound = false;
-        for (let i = 0; i < input.length; i++) {
-          if (Math.abs(input[i]) > 0.001) {
-            hasSound = true;
-            break;
-          }
-        }
-        if (!hasSound) return;
+        const numChannels = e.inputBuffer.numberOfChannels;
+        const left = e.inputBuffer.getChannelData(0);
+        const right = numChannels >= 2 ? e.inputBuffer.getChannelData(1) : null;
+        const len = left.length;
 
         // Downsample by 2x if sampleRate >= 44100 to conserve bandwidth
         const downsample = audioCtx.sampleRate >= 44100;
         const step = downsample ? 2 : 1;
-        const outLen = Math.floor(input.length / step);
+        const outLen = Math.floor(len / step);
         const int16 = new Int16Array(outLen);
         const outSampleRate = downsample ? Math.floor(audioCtx.sampleRate / 2) : audioCtx.sampleRate;
 
+        let hasSound = false;
         let outIdx = 0;
-        for (let i = 0; i < input.length; i += step) {
-          const s = Math.max(-1, Math.min(1, input[i]));
+        for (let i = 0; i < len; i += step) {
+          const raw = right ? (left[i] + right[i]) * 0.5 : left[i];
+          if (!hasSound && Math.abs(raw) > 0.001) {
+            hasSound = true;
+          }
+          const s = Math.max(-1, Math.min(1, raw));
           int16[outIdx++] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
+
+        if (!hasSound) return;
 
         // Encode to Base64
         const uint8 = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
@@ -189,6 +211,8 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
 
       audioCtx.__pcmTap = pcmTap;
       audioCtx.__silentGain = silentGain;
+      strongAudioNodes.add(pcmTap);
+      strongAudioNodes.add(silentGain);
 
       bus.connect(pcmTap);
       pcmTap.connect(silentGain);
@@ -239,31 +263,48 @@ function attachOpenALAudio(): MediaStreamTrack | null {
 
     const attached = audioCtx.__attachedSources || (audioCtx.__attachedSources = new WeakSet<AudioNode>());
 
-    // Connect OpenAL master listener gain if available
+    let newlyAttached = false;
+    // Check if OpenAL master listener gain is available
     const alCtxGain = (alCtx as unknown as { gain?: AudioNode }).gain;
-    if (alCtxGain && !attached.has(alCtxGain)) {
-      try {
-        alCtxGain.connect(bus);
-        attached.add(alCtxGain);
-        console.debug("[audio-host] master listener gain attached");
-      } catch (e) {
-        console.warn("[audio-host] failed to connect master gain:", e);
+    if (alCtxGain) {
+      // Connect ONLY master listener gain when available (avoids double-routing / comb filtering)
+      if (!attached.has(alCtxGain)) {
+        try {
+          alCtxGain.connect(bus);
+          attached.add(alCtxGain);
+          strongAudioNodes.add(alCtxGain);
+          newlyAttached = true;
+          console.debug("[audio-host] master listener gain attached");
+        } catch (e) {
+          console.warn("[audio-host] failed to connect master gain:", e);
+        }
+      }
+    } else {
+      // Fallback: iterate individual sources only if master listener gain is unavailable
+      const sources = alCtx.sources;
+      if (sources) {
+        for (const key in sources) {
+          const src = (sources as Record<string, { gain?: AudioNode } | undefined>)[key];
+          if (src?.gain && !attached.has(src.gain)) {
+            try {
+              src.gain.connect(bus);
+              attached.add(src.gain);
+              strongAudioNodes.add(src.gain);
+              newlyAttached = true;
+              console.debug("[audio-host] source attached");
+            } catch (e) {
+              console.warn("[audio-host] failed to connect source gain:", e);
+            }
+          }
+        }
       }
     }
 
-    const sources = alCtx.sources;
-    if (sources) {
-      for (const key in sources) {
-        const src = (sources as Record<string, { gain?: AudioNode } | undefined>)[key];
-        if (src?.gain && !attached.has(src.gain)) {
-          try {
-            src.gain.connect(bus);
-            attached.add(src.gain);
-            console.debug("[audio-host] source attached");
-          } catch (e) {
-            console.warn("[audio-host] failed to connect source gain:", e);
-          }
-        }
+    if (newlyAttached && !audioCtx.__openALAttached) {
+      audioCtx.__openALAttached = true;
+      if (track) {
+        console.debug("[audio-host] OpenAL first attached, forcing track emission:", track.id);
+        activeAudioTrackListener?.(track, true);
       }
     }
 
@@ -274,49 +315,6 @@ function attachOpenALAudio(): MediaStreamTrack | null {
       }
       return track;
     }
-  }
-
-  // Fallback to EmulatorJS built-in audio capture via collectScreenRecordingMediaTracks
-  try {
-    const win = window as unknown as {
-      EJS_emulator?: {
-        collectScreenRecordingMediaTracks?: (canvas: HTMLCanvasElement, fps: number) => MediaStreamTrack[] | MediaStream | null;
-      };
-    };
-    if (typeof win.EJS_emulator?.collectScreenRecordingMediaTracks === "function") {
-      const targetCanvas = (document.querySelector("#game canvas") as HTMLCanvasElement) || document.createElement("canvas");
-      const res = win.EJS_emulator.collectScreenRecordingMediaTracks(targetCanvas, 60);
-      if (res) {
-        const ejsTracks: MediaStreamTrack[] = Array.isArray(res)
-          ? res
-          : (typeof (res as MediaStream).getTracks === "function" ? (res as MediaStream).getAudioTracks() : []);
-        const audioTrack = ejsTracks.find((t: MediaStreamTrack) => t.kind === "audio");
-        if (audioTrack) {
-          console.debug("[audio-host] Found EmulatorJS built-in audio track:", audioTrack.id);
-          if (!window.__emulatorAudioStream) {
-            window.__emulatorAudioStream = new MediaStream([audioTrack]);
-          }
-          if (activeAudioCtx && typeof activeAudioCtx.createMediaStreamSource === "function") {
-            try {
-              const attached = activeAudioCtx.__attachedSources || (activeAudioCtx.__attachedSources = new WeakSet<AudioNode>());
-              const streamSource = activeAudioCtx.createMediaStreamSource(new MediaStream([audioTrack]));
-              if (!attached.has(streamSource)) {
-                const { bus } = ensureCaptureBus(activeAudioCtx);
-                streamSource.connect(bus);
-                attached.add(streamSource);
-              }
-            } catch {}
-          }
-          if (!(audioTrack as unknown as { __loggedReady?: boolean }).__loggedReady) {
-            (audioTrack as unknown as { __loggedReady?: boolean }).__loggedReady = true;
-            console.debug("[audio-host] track ready", audioTrack.id);
-          }
-          return audioTrack;
-        }
-      }
-    }
-  } catch (e) {
-    console.warn("[audio-host] EmulatorJS collectScreenRecordingMediaTracks fallback error:", e);
   }
 
   // Fallback to window.__emulatorAudioStream if available
@@ -494,6 +492,7 @@ function teardownEmulator() {
 
   // 5. Clean up audio contexts & streams (QA-02 AudioContext leak fix)
   activeAudioTrackListener = null;
+  strongAudioNodes.clear();
   const contextsToClose = new Set<ExtendedAudioContext>();
   if (activeAudioCtx) contextsToClose.add(activeAudioCtx);
   const alCtx = getOpenALContext();
@@ -656,10 +655,10 @@ export function Emulator({
     streamReadyFired.current = false;
     lastEmittedAudioTrackIdRef.current = null;
 
-    activeAudioTrackListener = (track: MediaStreamTrack) => {
-      if (track && track.id !== lastEmittedAudioTrackIdRef.current) {
+    activeAudioTrackListener = (track: MediaStreamTrack, force?: boolean) => {
+      if (track && (force || track.id !== lastEmittedAudioTrackIdRef.current)) {
         lastEmittedAudioTrackIdRef.current = track.id;
-        console.debug("[audio-host] Emitting new live audio track:", track.id);
+        console.debug("[audio-host] Emitting live audio track (force=" + Boolean(force) + "):", track.id);
         onAudioTrackAddedRef.current?.(track);
       }
     };

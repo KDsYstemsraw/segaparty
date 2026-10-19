@@ -200,6 +200,8 @@ export default function SessionPage() {
   const guestAudioCtxRef = useRef<AudioContext | null>(null);
   const guestAudioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const guestGainNodeRef = useRef<GainNode | null>(null);
+  const lastRtcAudioEnergyTimeRef = useRef<number>(0);
+  const rtcAnalyserRef = useRef<AnalyserNode | null>(null);
 
 
   const slotAssignmentsRef = useRef<SlotState>(slots);
@@ -442,7 +444,7 @@ export default function SessionPage() {
     return { type: defaultType, sdp: "" };
   };
 
-  // Guest WebAudio pipeline for uncompressed low-latency game sound (Kosmi style)
+  // Guest WebAudio pipeline: RMS Energy Monitor (AnalyserNode) + WS Playback Gain (non-competing with <audio>)
   const attachGuestWebAudio = useCallback((stream: MediaStream) => {
     try {
       const audioTracks = stream.getAudioTracks();
@@ -456,6 +458,7 @@ export default function SessionPage() {
       }
       const ctx = guestAudioCtxRef.current;
 
+      // Ensure gain node connected to destination is ready for WebSocket PCM fallback playback
       if (!guestGainNodeRef.current) {
         const gain = ctx.createGain();
         gain.gain.value = isMutedRef.current ? 0 : volumeRef.current;
@@ -465,18 +468,28 @@ export default function SessionPage() {
         guestGainNodeRef.current.gain.value = isMutedRef.current ? 0 : volumeRef.current;
       }
 
+      // Do NOT connect WebRTC MediaStreamSource to ctx.destination or guestGainNodeRef!
+      // This prevents Chromium dual-consumer conflict (Issue 93367). Hardware WebRTC audio is played by <audio>.
+      // Instead, connect audio-only stream source ONLY to an AnalyserNode for silent/active track detection.
       if (guestAudioSourceRef.current) {
         try { guestAudioSourceRef.current.disconnect(); } catch {}
       }
 
-      const source = ctx.createMediaStreamSource(stream);
-      source.connect(guestGainNodeRef.current);
+      if (!rtcAnalyserRef.current) {
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        rtcAnalyserRef.current = analyser;
+      }
+
+      const audioOnlyStream = new MediaStream(audioTracks);
+      const source = ctx.createMediaStreamSource(audioOnlyStream);
+      source.connect(rtcAnalyserRef.current);
       guestAudioSourceRef.current = source;
 
       if (ctx.state === "suspended" && !isMutedRef.current) {
         ctx.resume().catch(() => {});
       }
-      console.debug("[audio-guest] WebAudio pipeline attached successfully to remote stream");
+      console.debug("[audio-guest] WebAudio RMS AnalyserNode attached to remote audio tracks (hardware audio delegated to <audio>)");
     } catch (err) {
       console.warn("[audio-guest] WebAudio setup error:", err);
     }
@@ -673,15 +686,30 @@ export default function SessionPage() {
                   combined = new MediaStream(survivingTracks);
                 }
 
-                if (videoRef.current) {
-                  if (videoRef.current.srcObject !== combined) {
-                    videoRef.current.srcObject = combined;
+                const videoTracks = combined.getVideoTracks();
+                if (videoRef.current && videoTracks.length > 0) {
+                  const currentVideoTracks = (videoRef.current.srcObject as MediaStream | null)?.getVideoTracks() || [];
+                  if (currentVideoTracks.length !== videoTracks.length || currentVideoTracks[0]?.id !== videoTracks[0]?.id) {
+                    videoRef.current.srcObject = new MediaStream(videoTracks);
                   }
                   safePlayVideo(videoRef.current);
                 }
 
-                if (combined.getAudioTracks().length > 0) {
+                const audioTracks = combined.getAudioTracks();
+                if (audioTracks.length > 0) {
                   attachGuestWebAudio(combined);
+                  if (guestAudioElRef.current) {
+                    const currentAudioTracks = (guestAudioElRef.current.srcObject as MediaStream | null)?.getAudioTracks() || [];
+                    if (currentAudioTracks.length !== audioTracks.length || currentAudioTracks[0]?.id !== audioTracks[0]?.id) {
+                      guestAudioElRef.current.srcObject = new MediaStream(audioTracks);
+                    }
+                    guestAudioElRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+                    guestAudioElRef.current.muted = isMutedRef.current;
+                    guestAudioElRef.current.play().catch((err) => {
+                      console.debug("[audio-guest] <audio> autoplay waiting for user gesture:", err);
+                      setAudioBlocked(true);
+                    });
+                  }
                 }
 
                 return combined;
@@ -695,6 +723,9 @@ export default function SessionPage() {
                 }
                 if (e.track.kind === "audio" && remoteStreamRef.current) {
                   attachGuestWebAudio(remoteStreamRef.current);
+                  if (guestAudioElRef.current) {
+                    guestAudioElRef.current.play().catch(() => {});
+                  }
                 }
               };
 
@@ -706,8 +737,19 @@ export default function SessionPage() {
                   if (!cur) return null;
                   const active = cur.getTracks().filter((t) => t.id !== e.track.id && t.readyState !== "ended");
                   const nextStream = active.length > 0 ? new MediaStream(active) : null;
-                  if (videoRef.current && videoRef.current.srcObject !== nextStream) {
-                    videoRef.current.srcObject = nextStream;
+                  if (videoRef.current) {
+                    const nextVideoTracks = nextStream?.getVideoTracks() || [];
+                    const currentVideoTracks = (videoRef.current.srcObject as MediaStream | null)?.getVideoTracks() || [];
+                    if (currentVideoTracks.length !== nextVideoTracks.length || currentVideoTracks[0]?.id !== nextVideoTracks[0]?.id) {
+                      videoRef.current.srcObject = nextVideoTracks.length > 0 ? new MediaStream(nextVideoTracks) : null;
+                    }
+                  }
+                  if (guestAudioElRef.current) {
+                    const nextAudioTracks = nextStream?.getAudioTracks() || [];
+                    const currentAudioTracks = (guestAudioElRef.current.srcObject as MediaStream | null)?.getAudioTracks() || [];
+                    if (currentAudioTracks.length !== nextAudioTracks.length || currentAudioTracks[0]?.id !== nextAudioTracks[0]?.id) {
+                      guestAudioElRef.current.srcObject = nextAudioTracks.length > 0 ? new MediaStream(nextAudioTracks) : null;
+                    }
                   }
                   return nextStream;
                 });
@@ -1108,11 +1150,25 @@ export default function SessionPage() {
         }
 
         if (msg.type === "audio-chunk" && !isHost) {
-          const isRtcAudioPlaying = Boolean(
+          let hasRtcSignal = false;
+          if (
+            rtcAnalyserRef.current &&
             guestAudioElRef.current &&
             !guestAudioElRef.current.paused &&
             !guestAudioElRef.current.muted
-          );
+          ) {
+            const buf = new Float32Array(rtcAnalyserRef.current.fftSize);
+            rtcAnalyserRef.current.getFloatTimeDomainData(buf);
+            for (let i = 0; i < buf.length; i++) {
+              if (Math.abs(buf[i]) > 0.002) {
+                hasRtcSignal = true;
+                lastRtcAudioEnergyTimeRef.current = Date.now();
+                break;
+              }
+            }
+          }
+          const isRtcAudioPlaying =
+            hasRtcSignal || (Date.now() - lastRtcAudioEnergyTimeRef.current < 1200);
 
           if (isRtcAudioPlaying) {
             // WebRTC audio is actively playing through <audio>; ensure gain reflects current mute/volume state and skip WS PCM fallback
@@ -1310,9 +1366,11 @@ export default function SessionPage() {
       attachGuestWebAudio(remoteStream);
     }
 
-    if (guestAudioElRef.current && remoteStream) {
-      if (guestAudioElRef.current.srcObject !== remoteStream) {
-        guestAudioElRef.current.srcObject = remoteStream;
+    const audioTracks = remoteStream?.getAudioTracks() || [];
+    if (guestAudioElRef.current && audioTracks.length > 0) {
+      const currentAudioTracks = (guestAudioElRef.current.srcObject as MediaStream | null)?.getAudioTracks() || [];
+      if (currentAudioTracks.length !== audioTracks.length || currentAudioTracks[0]?.id !== audioTracks[0]?.id) {
+        guestAudioElRef.current.srcObject = new MediaStream(audioTracks);
       }
       guestAudioElRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
       guestAudioElRef.current.muted = isMutedRef.current;
@@ -1322,14 +1380,16 @@ export default function SessionPage() {
       });
     }
 
-    if (videoRef.current && remoteStream) {
-      if (videoRef.current.srcObject !== remoteStream) {
-        videoRef.current.srcObject = remoteStream;
+    const videoTracks = remoteStream?.getVideoTracks() || [];
+    if (videoRef.current && videoTracks.length > 0) {
+      const currentVideoTracks = (videoRef.current.srcObject as MediaStream | null)?.getVideoTracks() || [];
+      if (currentVideoTracks.length !== videoTracks.length || currentVideoTracks[0]?.id !== videoTracks[0]?.id) {
+        videoRef.current.srcObject = new MediaStream(videoTracks);
       }
       safePlayVideo(videoRef.current);
 
       // Auto-trigger playback when video packets begin arriving
-      remoteStream.getVideoTracks().forEach((track) => {
+      videoTracks.forEach((track) => {
         track.onunmute = () => {
           if (videoRef.current) {
             safePlayVideo(videoRef.current);
@@ -1338,10 +1398,10 @@ export default function SessionPage() {
       });
 
       // Auto-trigger playback when audio packets begin arriving
-      remoteStream.getAudioTracks().forEach((track) => {
+      audioTracks.forEach((track) => {
         track.onunmute = () => {
           console.debug(`[audio] Remote audio track unmuted: ${track.id}`);
-          attachGuestWebAudio(remoteStream);
+          if (remoteStream) attachGuestWebAudio(remoteStream);
           if (guestAudioElRef.current) {
             guestAudioElRef.current.play().catch(() => {});
           }
@@ -1388,6 +1448,7 @@ export default function SessionPage() {
   // Late audio track addition from emulator
   const handleAudioTrackAdded = useCallback((track: MediaStreamTrack) => {
     if (!gameStreamRef.current) return;
+    track.enabled = true;
     // Cleanly replace old audio tracks in gameStreamRef
     const oldAudioTracks = gameStreamRef.current.getAudioTracks();
     oldAudioTracks.forEach((t) => {
@@ -1800,10 +1861,16 @@ export default function SessionPage() {
 
   const unlockAudio = useCallback(() => {
     console.debug("[audio] unlock called");
-    if (guestAudioElRef.current) {
-      if (remoteStreamRef.current && guestAudioElRef.current.srcObject !== remoteStreamRef.current) {
-        guestAudioElRef.current.srcObject = remoteStreamRef.current;
+    const audioTracks = remoteStreamRef.current?.getAudioTracks() || [];
+    if (guestAudioElRef.current && audioTracks.length > 0) {
+      const currentAudioTracks = (guestAudioElRef.current.srcObject as MediaStream | null)?.getAudioTracks() || [];
+      if (currentAudioTracks.length !== audioTracks.length || currentAudioTracks[0]?.id !== audioTracks[0]?.id) {
+        guestAudioElRef.current.srcObject = new MediaStream(audioTracks);
       }
+      guestAudioElRef.current.muted = false;
+      guestAudioElRef.current.volume = volumeRef.current;
+      guestAudioElRef.current.play().catch(() => {});
+    } else if (guestAudioElRef.current) {
       guestAudioElRef.current.muted = false;
       guestAudioElRef.current.volume = volumeRef.current;
       guestAudioElRef.current.play().catch(() => {});
@@ -2362,8 +2429,12 @@ export default function SessionPage() {
                     <audio
                       ref={(el) => {
                         guestAudioElRef.current = el;
-                        if (el && remoteStream && el.srcObject !== remoteStream) {
-                          el.srcObject = remoteStream;
+                        const audioTracks = remoteStream?.getAudioTracks() || [];
+                        if (el && audioTracks.length > 0) {
+                          const currentAudioTracks = (el.srcObject as MediaStream | null)?.getAudioTracks() || [];
+                          if (currentAudioTracks.length !== audioTracks.length || currentAudioTracks[0]?.id !== audioTracks[0]?.id) {
+                            el.srcObject = new MediaStream(audioTracks);
+                          }
                           el.volume = isMutedRef.current ? 0 : volumeRef.current;
                           el.muted = isMutedRef.current;
                           el.play().catch((err) => {
@@ -2382,8 +2453,12 @@ export default function SessionPage() {
                         videoRef.current = el;
                         if (el) {
                           el.muted = true;
-                          if (remoteStream && el.srcObject !== remoteStream) {
-                            el.srcObject = remoteStream;
+                          const videoTracks = remoteStream?.getVideoTracks() || [];
+                          if (videoTracks.length > 0) {
+                            const currentVideoTracks = (el.srcObject as MediaStream | null)?.getVideoTracks() || [];
+                            if (currentVideoTracks.length !== videoTracks.length || currentVideoTracks[0]?.id !== videoTracks[0]?.id) {
+                              el.srcObject = new MediaStream(videoTracks);
+                            }
                             safePlayVideo(el);
                           }
                         }
