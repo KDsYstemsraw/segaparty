@@ -162,7 +162,7 @@ function ensureCaptureBus(audioCtx: ExtendedAudioContext): {
   // Setup ScriptProcessor for PCM tap if not already set up
   if (!audioCtx.__pcmTap && typeof audioCtx.createScriptProcessor === "function") {
     try {
-      const pcmTap = audioCtx.createScriptProcessor(2048, 2, 1);
+      const pcmTap = audioCtx.createScriptProcessor(4096, 2, 1);
       const silentGain = audioCtx.createGain();
       silentGain.gain.value = 0.00001; // -100dB inaudible keepalive prevents Chromium dead-cutting
       (pcmTap as unknown as { __isInternalAudio: boolean }).__isInternalAudio = true;
@@ -418,7 +418,7 @@ function installAudioCaptureHook() {
 
             const newTrack = ctx.__streamDest?.stream.getAudioTracks()[0];
             if (newTrack) {
-              activeAudioTrackListener?.(newTrack);
+              activeAudioTrackListener?.(newTrack, true);
             }
           } catch {}
         }

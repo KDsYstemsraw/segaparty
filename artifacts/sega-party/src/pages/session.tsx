@@ -478,6 +478,10 @@ export default function SessionPage() {
       if (!rtcAnalyserRef.current) {
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
+        const silentMonitor = ctx.createGain();
+        silentMonitor.gain.value = 0.00001;
+        analyser.connect(silentMonitor);
+        silentMonitor.connect(ctx.destination);
         rtcAnalyserRef.current = analyser;
       }
 
@@ -1150,13 +1154,16 @@ export default function SessionPage() {
         }
 
         if (msg.type === "audio-chunk" && !isHost) {
-          let hasRtcSignal = false;
-          if (
-            rtcAnalyserRef.current &&
+          const audioTracks = (guestAudioElRef.current?.srcObject as MediaStream | null)?.getAudioTracks() || [];
+          const hasLiveUnmutedRtcTrack = Boolean(
             guestAudioElRef.current &&
             !guestAudioElRef.current.paused &&
-            !guestAudioElRef.current.muted
-          ) {
+            !guestAudioElRef.current.muted &&
+            audioTracks.some((t) => t.readyState === "live" && t.enabled && !t.muted)
+          );
+
+          let hasRtcSignal = false;
+          if (rtcAnalyserRef.current && hasLiveUnmutedRtcTrack) {
             const buf = new Float32Array(rtcAnalyserRef.current.fftSize);
             rtcAnalyserRef.current.getFloatTimeDomainData(buf);
             for (let i = 0; i < buf.length; i++) {
@@ -1168,13 +1175,15 @@ export default function SessionPage() {
             }
           }
           const isRtcAudioPlaying =
-            hasRtcSignal || (Date.now() - lastRtcAudioEnergyTimeRef.current < 1200);
+            hasLiveUnmutedRtcTrack &&
+            (rtcVideoActiveRef.current || hasRtcSignal || Date.now() - lastRtcAudioEnergyTimeRef.current < 1500);
 
           if (isRtcAudioPlaying) {
-            // WebRTC audio is actively playing through <audio>; ensure gain reflects current mute/volume state and skip WS PCM fallback
+            // WebRTC audio is actively playing through <audio>; mute WS fallback gain and reset nextAudioTime to prevent any overlap/echo collision
             if (guestGainNodeRef.current) {
-              guestGainNodeRef.current.gain.value = isMutedRef.current ? 0 : volumeRef.current;
+              guestGainNodeRef.current.gain.value = 0;
             }
+            nextAudioTimeRef.current = 0;
           } else if (!isMutedRef.current) {
             try {
               const pcmBase64 = msg.pcm as string;
@@ -1223,7 +1232,16 @@ export default function SessionPage() {
                     bufferSource.connect(guestGainNodeRef.current);
 
                     const now = ctx.currentTime;
-                    nextAudioTimeRef.current = Math.min(Math.max(now, nextAudioTimeRef.current), now + 0.1);
+                    const JITTER_BUFFER_SECS = 0.08; // 80ms cushion prevents underrun clicks
+
+                    if (nextAudioTimeRef.current < now) {
+                      // Underrun or first packet: schedule 80ms ahead so subsequent chunks chain seamlessly
+                      nextAudioTimeRef.current = now + JITTER_BUFFER_SECS;
+                    } else if (nextAudioTimeRef.current > now + 0.4) {
+                      // Excessive drift (>400ms): resync cleanly without overlapping active buffers
+                      nextAudioTimeRef.current = now + JITTER_BUFFER_SECS;
+                    }
+
                     const startTime = nextAudioTimeRef.current;
                     bufferSource.start(startTime);
                     nextAudioTimeRef.current = startTime + audioBuffer.duration;
@@ -1527,17 +1545,13 @@ export default function SessionPage() {
     [code, isHost],
   );
 
-  // Host dual-transport audio chunk broadcasting over WebSocket for instant guest sound (throttled when RTC is active, QA2-05)
+  // Host dual-transport audio chunk broadcasting over WebSocket for instant guest sound
   const handleAudioChunk = useCallback(
     (pcmBase64: string, sampleRate: number) => {
       if (!isHost || wsRef.current?.readyState !== WebSocket.OPEN) return;
 
       const guests = participantsRef.current.filter((p) => p.peerId !== myPeerId.current);
       if (guests.length === 0 && peerConnsRef.current.size === 0) return;
-
-      const now = performance.now();
-      if (now - lastAudioChunkSentRef.current < 40) return;
-      lastAudioChunkSentRef.current = now;
 
       wsRef.current.send(
         JSON.stringify({
