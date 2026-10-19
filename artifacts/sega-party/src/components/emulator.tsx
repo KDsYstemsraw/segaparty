@@ -582,6 +582,8 @@ function teardownEmulator() {
   delete (window as unknown as Record<string, unknown>).__hasActiveRtcPeers;
 }
 
+const EMULATOR_MOUNT_ID = "game";
+
 export function Emulator({
   romUrl,
   gameName,
@@ -624,6 +626,7 @@ export function Emulator({
 
   useEffect(() => {
     if (!containerRef.current) return;
+    let cancelled = false;
 
     // Clean up any existing emulator instances, WebGL contexts, or DOM nodes
     teardownEmulator();
@@ -786,7 +789,7 @@ export function Emulator({
     // WebSocket / Broadcast frame capture canvas & interval (~7 FPS fallback when WebRTC is inactive)
     let frameCanvas: HTMLCanvasElement | null = null;
     let frameCtx: CanvasRenderingContext2D | null = null;
-    let frameBroadcastId: ReturnType<typeof setInterval> | null = null;
+    let frameBroadcastId: ReturnType<typeof setInterval> | number | null = null;
 
     // 2D Intermediate Capture Buffer Pump for WebGL (fallback if sourceCanvas.captureStream fails)
     let captureCanvas: HTMLCanvasElement | null = null;
@@ -797,31 +800,55 @@ export function Emulator({
       const sourceCanvas = document.querySelector("#game canvas") as HTMLCanvasElement | null;
       if (!sourceCanvas || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) return false;
 
-      // Start ~7 FPS (140ms) frame broadcast interval if onVideoFrame is requested
+      // Start non-blocking async frame broadcast interval (100ms) if onVideoFrame is requested
       if (!frameBroadcastId) {
-        frameCanvas = document.createElement("canvas");
-        frameCanvas.width = 320;
-        frameCanvas.height = 224;
-        frameCtx = frameCanvas.getContext("2d", { alpha: false });
-        if (frameCtx) {
-          frameCtx.imageSmoothingEnabled = false;
-        }
+        let encodingFrame = false;
+        frameBroadcastId = window.setInterval(() => {
+          if (cancelled) return;
+          if (!onVideoFrameRef.current) return;
+          if ((window as unknown as { __hasActiveRtcPeers?: boolean }).__hasActiveRtcPeers || hasActiveRtcPeersRef.current) return;
+          if (encodingFrame) return;
 
-        frameBroadcastId = setInterval(() => {
-          if (!onVideoFrameRef.current || !sourceCanvas || !frameCtx || !frameCanvas) return;
-          // Dual-Transport Frame Throttling (QA-01):
-          // When WebRTC video stream is active and serving peers, suppress WebSocket JPEG frame broadcasting
-          // completely to avoid redundant ~350 KB/s TCP traffic and player input starvation.
-          if (hasActiveRtcPeersRef.current || window.__hasActiveRtcPeers) return;
-          if (sourceCanvas.width === 0 || sourceCanvas.height === 0) return;
+          const mountEl = document.getElementById(EMULATOR_MOUNT_ID);
+          const canvas = (mountEl?.querySelector("canvas") || document.querySelector("#game canvas")) as HTMLCanvasElement | null;
+          if (!canvas || canvas.width === 0 || canvas.height === 0) return;
+
           try {
-            frameCtx.drawImage(sourceCanvas, 0, 0, 320, 224);
-            const dataUrl = frameCanvas.toDataURL("image/jpeg", 0.55);
-            onVideoFrameRef.current(dataUrl);
+            if (!frameCanvas) {
+              frameCanvas = document.createElement("canvas");
+              frameCanvas.width = 320;
+              frameCanvas.height = 240;
+              frameCtx = frameCanvas.getContext("2d", { alpha: false });
+            }
+            if (frameCtx) {
+              frameCtx.drawImage(canvas, 0, 0, 320, 240);
+              encodingFrame = true;
+              frameCanvas.toBlob(
+                (blob) => {
+                  if (!blob || cancelled || (window as unknown as { __hasActiveRtcPeers?: boolean }).__hasActiveRtcPeers || hasActiveRtcPeersRef.current) {
+                    encodingFrame = false;
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    encodingFrame = false;
+                    if (!cancelled && typeof reader.result === "string" && !(window as unknown as { __hasActiveRtcPeers?: boolean }).__hasActiveRtcPeers && !hasActiveRtcPeersRef.current) {
+                      onVideoFrameRef.current?.(reader.result);
+                    }
+                  };
+                  reader.onerror = () => {
+                    encodingFrame = false;
+                  };
+                  reader.readAsDataURL(blob);
+                },
+                "image/jpeg",
+                0.55,
+              );
+            }
           } catch {
-            // Ignore capture error if canvas temporarily not ready
+            encodingFrame = false;
           }
-        }, 140);
+        }, 100);
       }
 
       if (streamReadyFired.current) return true;
@@ -903,8 +930,15 @@ export function Emulator({
         const videoTracks = videoStream.getVideoTracks();
         if (videoTracks.length === 0) return false;
 
+        const vTrack = videoTracks[0];
+        if (vTrack && "contentHint" in vTrack) {
+          try {
+            vTrack.contentHint = "motion";
+          } catch {}
+        }
+
         const composite = new MediaStream();
-        composite.addTrack(videoTracks[0]);
+        composite.addTrack(vTrack);
 
         // Ensure an audio track is ALWAYS present in composite from frame 0
         const audioTrack = attachOpenALAudio() || getOrCreateCaptureTrack();
@@ -1015,6 +1049,7 @@ export function Emulator({
     document.body.appendChild(script);
 
     return () => {
+      cancelled = true;
       window.removeEventListener("controls-mapping-changed", handleControlsMappingChanged);
       window.removeEventListener("pointerdown", resumeSuspendedAudio);
       window.removeEventListener("keydown", resumeSuspendedAudio);

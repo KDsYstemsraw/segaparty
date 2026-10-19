@@ -392,22 +392,56 @@ export default function SessionPage() {
     if (isHost) return;
 
     const interval = setInterval(() => {
-      if (!rtcVideoActiveRef.current) return;
-
       const video = videoRef.current;
-      const now = Date.now();
-      const lastUpdate = lastVideoTimeRef.current.timestamp;
+      if (!video) return;
 
-      // If video element is paused or currentTime hasn't moved in > 1800ms
+      const now = Date.now();
+
+      // Check if peer connection is disconnected/failed/closed
+      let isIceDead = false;
+      for (const [, pc] of peerConnsRef.current) {
+        if (
+          pc.iceConnectionState === "disconnected" ||
+          pc.iceConnectionState === "failed" ||
+          pc.iceConnectionState === "closed"
+        ) {
+          isIceDead = true;
+          break;
+        }
+      }
+
+      if (isIceDead) {
+        if (rtcVideoActiveRef.current) {
+          console.debug("[WebRTC Watchdog] ICE disconnected/failed; switching to WebSocket fallback stream");
+          rtcVideoActiveRef.current = false;
+          setRtcVideoActive(false);
+        }
+        return;
+      }
+
+      if (!video.paused && video.videoWidth > 0) {
+        const curTime = video.currentTime;
+        if (curTime !== lastVideoTimeRef.current.time || video.readyState >= 3) {
+          lastVideoTimeRef.current = { time: curTime, timestamp: now };
+          if (!rtcVideoActiveRef.current) {
+            rtcVideoActiveRef.current = true;
+            setRtcVideoActive(true);
+          }
+        }
+      }
+
+      const lastUpdate = lastVideoTimeRef.current.timestamp;
+      // Only flip rtcVideoActive(false) if video hasn't advanced for > 4000ms (4s)
       if (
-        (video && video.paused) ||
-        (lastUpdate > 0 && now - lastUpdate > 1800)
+        rtcVideoActiveRef.current &&
+        lastUpdate > 0 &&
+        now - lastUpdate > 4000
       ) {
-        console.debug("[WebRTC Watchdog] Video stalled or frozen; unmasking WebSocket fallback stream");
+        console.debug(`[WebRTC Watchdog] Video stalled (>4000ms without progress, elapsed=${now - lastUpdate}ms); unmasking WebSocket fallback stream`);
         rtcVideoActiveRef.current = false;
         setRtcVideoActive(false);
       }
-    }, 500);
+    }, 1000);
 
     return () => clearInterval(interval);
   }, [isHost]);
@@ -502,6 +536,7 @@ export default function SessionPage() {
   // Safe muted video play for 100% autoplay reliability (video engine never stalls)
   const safePlayVideo = useCallback((videoEl: HTMLVideoElement | null) => {
     if (!videoEl) return;
+    if (!videoEl.paused) return;
     videoEl.muted = true;
     videoEl.play().catch((err) => {
       console.debug("[video] safePlayVideo play failed:", err);
@@ -589,15 +624,40 @@ export default function SessionPage() {
         };
 
         if (stream) {
-          for (const track of stream.getTracks()) {
-            pc.addTrack(track, stream);
-          }
+          stream.getTracks().forEach((track) => {
+            if (track.kind === "video" && "contentHint" in track) {
+              try {
+                track.contentHint = "motion";
+              } catch {}
+            }
+            const sender = pc.addTrack(track, stream);
+            if (track.kind === "video") {
+              try {
+                const params = sender.getParameters();
+                params.degradationPreference = "maintain-framerate";
+                if (!params.encodings || params.encodings.length === 0) {
+                  params.encodings = [{}];
+                }
+                params.encodings[0].maxBitrate = 4_000_000;
+                params.encodings[0].maxFramerate = 60;
+                sender.setParameters(params).catch(() => {});
+              } catch {}
+            }
+          });
         }
 
         pc.onicecandidate = (e) => {
           if (e.candidate) {
             sendSignal(guestPeerId, { type: "ice-candidate", candidate: e.candidate.toJSON() });
           }
+        };
+
+        pc.onconnectionstatechange = () => {
+          loggerDebug(`Host connectionState with ${guestPeerId}: ${pc.connectionState}`);
+          setWebrtcStatus((prev) => ({
+            ...prev,
+            ice: pc.iceConnectionState || pc.connectionState,
+          }));
         };
 
         pc.oniceconnectionstatechange = async () => {
@@ -1392,10 +1452,12 @@ export default function SessionPage() {
       }
       guestAudioElRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
       guestAudioElRef.current.muted = isMutedRef.current;
-      guestAudioElRef.current.play().catch((err) => {
-        console.debug("[audio-guest] <audio> autoplay waiting for user gesture:", err);
-        setAudioBlocked(true);
-      });
+      if (guestAudioElRef.current.paused) {
+        guestAudioElRef.current.play().catch((err) => {
+          console.debug("[audio-guest] <audio> autoplay waiting for user gesture:", err);
+          setAudioBlocked(true);
+        });
+      }
     }
 
     const videoTracks = remoteStream?.getVideoTracks() || [];
@@ -1420,7 +1482,7 @@ export default function SessionPage() {
         track.onunmute = () => {
           console.debug(`[audio] Remote audio track unmuted: ${track.id}`);
           if (remoteStream) attachGuestWebAudio(remoteStream);
-          if (guestAudioElRef.current) {
+          if (guestAudioElRef.current && guestAudioElRef.current.paused) {
             guestAudioElRef.current.play().catch(() => {});
           }
         };
@@ -2441,42 +2503,14 @@ export default function SessionPage() {
 
                     {/* Dedicated Guest Audio Element (unmuted for hardware audio decoding) */}
                     <audio
-                      ref={(el) => {
-                        guestAudioElRef.current = el;
-                        const audioTracks = remoteStream?.getAudioTracks() || [];
-                        if (el && audioTracks.length > 0) {
-                          const currentAudioTracks = (el.srcObject as MediaStream | null)?.getAudioTracks() || [];
-                          if (currentAudioTracks.length !== audioTracks.length || currentAudioTracks[0]?.id !== audioTracks[0]?.id) {
-                            el.srcObject = new MediaStream(audioTracks);
-                          }
-                          el.volume = isMutedRef.current ? 0 : volumeRef.current;
-                          el.muted = isMutedRef.current;
-                          el.play().catch((err) => {
-                            console.debug("[audio-guest] <audio> autoplay waiting for user gesture:", err);
-                            setAudioBlocked(true);
-                          });
-                        }
-                      }}
+                      ref={guestAudioElRef}
                       autoPlay
                       playsInline
                     />
 
                     {/* WebRTC Video Stream - transparent until decoding active frames */}
                     <video
-                      ref={(el) => {
-                        videoRef.current = el;
-                        if (el) {
-                          el.muted = true;
-                          const videoTracks = remoteStream?.getVideoTracks() || [];
-                          if (videoTracks.length > 0) {
-                            const currentVideoTracks = (el.srcObject as MediaStream | null)?.getVideoTracks() || [];
-                            if (currentVideoTracks.length !== videoTracks.length || currentVideoTracks[0]?.id !== videoTracks[0]?.id) {
-                              el.srcObject = new MediaStream(videoTracks);
-                            }
-                            safePlayVideo(el);
-                          }
-                        }
-                      }}
+                      ref={videoRef}
                       onTimeUpdate={(e) => {
                         const curTime = e.currentTarget.currentTime;
                         if (curTime !== lastVideoTimeRef.current.time) {
@@ -2487,18 +2521,6 @@ export default function SessionPage() {
                             setRtcVideoActive(true);
                             rtcVideoActiveRef.current = true;
                           }
-                        }
-                      }}
-                      onPause={() => {
-                        if (!isHost) {
-                          setRtcVideoActive(false);
-                          rtcVideoActiveRef.current = false;
-                        }
-                      }}
-                      onWaiting={() => {
-                        if (!isHost) {
-                          setRtcVideoActive(false);
-                          rtcVideoActiveRef.current = false;
                         }
                       }}
                       onPlaying={(e) => {
