@@ -593,13 +593,13 @@ export default function SessionPage() {
               existingPc.restartIce();
             }
             const offer = await existingPc.createOffer({ iceRestart: true });
-            await existingPc.setLocalDescription(offer);
+            const mungedOfferSdp = mungeSdpFor60Fps(offer.sdp || "");
+            const mungedOffer: RTCSessionDescriptionInit = { type: "offer", sdp: mungedOfferSdp };
+            await existingPc.setLocalDescription(mungedOffer);
             setWebrtcStatus((prev) => ({ ...prev, lastSignal: `Sent ICE Restart Offer` }));
-            const rawSdp = existingPc.localDescription?.sdp || "";
-            const mungedSdp = mungeSdpFor60Fps(rawSdp);
             sendSignal(guestPeerId, {
               type: "offer",
-              sdp: { type: "offer", sdp: mungedSdp },
+              sdp: mungedOffer,
               isRenegotiation: true,
             });
             return;
@@ -698,12 +698,12 @@ export default function SessionPage() {
                 pc.restartIce();
               }
               const offer = await pc.createOffer({ iceRestart: true });
-              await pc.setLocalDescription(offer);
-              const rawSdp = pc.localDescription?.sdp || "";
-              const mungedSdp = mungeSdpFor60Fps(rawSdp);
+              const mungedOfferSdp = mungeSdpFor60Fps(offer.sdp || "");
+              const mungedOffer: RTCSessionDescriptionInit = { type: "offer", sdp: mungedOfferSdp };
+              await pc.setLocalDescription(mungedOffer);
               sendSignal(guestPeerId, {
                 type: "offer",
-                sdp: { type: "offer", sdp: mungedSdp },
+                sdp: mungedOffer,
                 isRenegotiation: true,
               });
             } catch (e) {
@@ -713,7 +713,9 @@ export default function SessionPage() {
         };
 
         const offer = await pc.createOffer(options?.iceRestart ? { iceRestart: true } : undefined);
-        await pc.setLocalDescription(offer);
+        const mungedOfferSdp = mungeSdpFor60Fps(offer.sdp || "");
+        const mungedOffer: RTCSessionDescriptionInit = { type: "offer", sdp: mungedOfferSdp };
+        await pc.setLocalDescription(mungedOffer);
 
         const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
         if (videoSender) {
@@ -725,6 +727,7 @@ export default function SessionPage() {
             }
             params.encodings[0].maxBitrate = 4_000_000;
             params.encodings[0].maxFramerate = 60;
+            params.encodings[0].scaleResolutionDownBy = 1.0;
             await videoSender.setParameters(params);
             console.debug("[WebRTC] Successfully applied maintain-framerate & 60fps on videoSender");
           } catch (paramErr) {
@@ -733,11 +736,9 @@ export default function SessionPage() {
         }
 
         setWebrtcStatus((prev) => ({ ...prev, lastSignal: `Sent Offer (${stream?.getTracks().length || 0} tracks)` }));
-        const rawSdp = pc.localDescription?.sdp || "";
-        const mungedSdp = mungeSdpFor60Fps(rawSdp);
         sendSignal(guestPeerId, {
           type: "offer",
-          sdp: { type: "offer", sdp: mungedSdp },
+          sdp: mungedOffer,
           isRenegotiation: Boolean(options?.iceRestart),
         });
       } catch (err) {
@@ -940,11 +941,11 @@ export default function SessionPage() {
           }
 
           const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
+          const mungedAnswerSdp = mungeSdpFor60Fps(answer.sdp || "");
+          const mungedAnswer: RTCSessionDescriptionInit = { type: "answer", sdp: mungedAnswerSdp };
+          await pc.setLocalDescription(mungedAnswer);
           setWebrtcStatus((prev) => ({ ...prev, lastSignal: "Sent Answer" }));
-          const rawAnswerSdp = pc.localDescription?.sdp || "";
-          const mungedAnswerSdp = mungeSdpFor60Fps(rawAnswerSdp);
-          sendSignal(fromPeerId, { type: "answer", sdp: { type: "answer", sdp: mungedAnswerSdp } });
+          sendSignal(fromPeerId, { type: "answer", sdp: mungedAnswer });
           return;
         }
 
@@ -966,6 +967,7 @@ export default function SessionPage() {
                 }
                 params.encodings[0].maxBitrate = 4_000_000;
                 params.encodings[0].maxFramerate = 60;
+                params.encodings[0].scaleResolutionDownBy = 1.0;
                 await videoSender.setParameters(params);
                 console.debug("[WebRTC] Re-applied maintain-framerate & 60fps on videoSender after setRemoteDescription(answer)");
               } catch (paramErr) {
@@ -1630,12 +1632,12 @@ export default function SessionPage() {
         } else {
           pc.addTrack(track, gameStreamRef.current!);
           const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          const rawSdp = pc.localDescription?.sdp || "";
-          const mungedSdp = mungeSdpFor60Fps(rawSdp);
+          const mungedOfferSdp = mungeSdpFor60Fps(offer.sdp || "");
+          const mungedOffer: RTCSessionDescriptionInit = { type: "offer", sdp: mungedOfferSdp };
+          await pc.setLocalDescription(mungedOffer);
           sendSignal(peerId, {
             type: "offer",
-            sdp: { type: "offer", sdp: mungedSdp },
+            sdp: mungedOffer,
             isRenegotiation: true,
           });
         }
@@ -2580,6 +2582,7 @@ export default function SessionPage() {
                     <img
                       ref={wsImgRef}
                       alt="Game Stream"
+                      style={{ imageRendering: "pixelated" }}
                       className={`w-full h-full object-contain absolute inset-0 z-0 ${hasWsStream ? "opacity-100" : "opacity-0 pointer-events-none"}`}
                     />
 
@@ -2593,6 +2596,7 @@ export default function SessionPage() {
                     {/* WebRTC Video Stream - transparent until decoding active frames */}
                     <video
                       ref={videoRef}
+                      style={{ imageRendering: "pixelated" }}
                       onTimeUpdate={(e) => {
                         const curTime = e.currentTarget.currentTime;
                         if (curTime !== lastVideoTimeRef.current.time) {
